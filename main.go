@@ -132,6 +132,7 @@ type root struct {
 	cancelQualityLookup  stdcontext.CancelFunc
 	internetState        string
 	driveState           string
+	discState            string
 }
 
 type downloadResult struct {
@@ -312,24 +313,36 @@ type environmentCard struct {
 	hint       basicwidget.Text
 	label      string
 	status     string
+	hintText   string
 	tone       color.Color
+	hintTone   color.Color
 }
 
-func (c *environmentCard) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
+func (c *environmentCard) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	c.background.SetTintColor(color.RGBA{R: 250, G: 250, B: 250, A: 255})
 	c.heading.SetValue(c.label)
 	c.value.SetValue(c.status)
-	c.hint.SetValue(statusHint(c.status))
+	hintText := c.hintText
+	if hintText == "" {
+		hintText = statusHint(c.status)
+	}
+	c.hint.SetValue(hintText)
 	c.heading.SetSelectable(false)
 	c.value.SetSelectable(false)
 	c.hint.SetSelectable(false)
+	c.hint.SetFontSize(float64(basicwidget.UnitSize(context)) * 0.65)
+	c.hint.SetLineHeight(float64(basicwidget.UnitSize(context)) * 0.75)
 	var style basicwidget.TextStyles
 	style.SetColorInRange(0, len(c.status), c.tone)
 	style.SetWeightInRange(0, len(c.status), 600)
 	c.value.SetOverrideStyles(&style, false)
+	var hintStyle basicwidget.TextStyles
+	hintStyle.SetColorInRange(0, len(hintText), c.hintTone)
+	c.hint.SetOverrideStyles(&hintStyle, false)
 	adder.AddWidget(&c.background)
 	adder.AddWidget(&c.heading)
 	adder.AddWidget(&c.value)
+	adder.AddWidget(&c.hint)
 	return nil
 }
 
@@ -337,14 +350,15 @@ func (c *environmentCard) Layout(context *guigui.Context, bounds *guigui.WidgetB
 	b := bounds.Bounds()
 	u := basicwidget.UnitSize(context)
 	layouter.LayoutWidget(&c.background, b)
-	layouter.LayoutWidget(&c.heading, image.Rect(b.Min.X+u, b.Min.Y+u/3, b.Max.X-u, b.Min.Y+u+u/3))
-	layouter.LayoutWidget(&c.value, image.Rect(b.Min.X+u, b.Min.Y+u+u/3, b.Max.X-u, b.Min.Y+2*u+u/3))
-	layouter.LayoutWidget(&c.hint, image.Rect(b.Min.X+u, b.Min.Y+2*u+u/3, b.Max.X-u, b.Max.Y-u/4))
+	layouter.LayoutWidget(&c.heading, image.Rect(b.Min.X+u, b.Min.Y+u/6, b.Max.X-u, b.Min.Y+u))
+	layouter.LayoutWidget(&c.value, image.Rect(b.Min.X+u, b.Min.Y+u, b.Max.X-u, b.Min.Y+2*u))
+	layouter.LayoutWidget(&c.hint, image.Rect(b.Min.X+u, b.Min.Y+2*u, b.Max.X-u, b.Max.Y-u/6))
 }
 
 type environmentCheck struct {
 	internet string
 	drive    string
+	disc     string
 }
 
 type sidebarMenuItem struct {
@@ -940,8 +954,13 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.driveCard.label = "DVDドライブ"
 		r.driveCard.status = r.driveState
 		r.driveCard.tone = statusColor(r.driveState)
+		r.driveCard.hintText = ""
+		if r.driveState == "検出済み" {
+			r.driveCard.hintText = "ディスク：" + r.discState
+		}
+		r.driveCard.hintTone = statusColor(r.discState)
 		r.environmentDivider.SetTintColor(color.RGBA{R: 185, G: 185, B: 185, A: 255})
-		r.environmentNotice.SetValue(environmentNotice(r.internetState, r.driveState))
+		r.environmentNotice.SetValue(environmentNotice(r.internetState, r.driveState, r.discState))
 		r.environmentNotice.SetMultiline(true)
 		r.environmentNotice.SetWrapMode(basicwidget.WrapModeNormal)
 		if len(r.helpPages) > 0 {
@@ -966,7 +985,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.environmentHelp.SetOverrideStyles(&helpStyle, false)
 		var noticeStyle basicwidget.TextStyles
 		noticeText := r.environmentNotice.Value()
-		if r.internetState == "確認中…" || r.driveState == "確認中…" {
+		if r.internetState == "確認中…" || r.driveState == "確認中…" || r.discState == dvdMediaChecking {
 			noticeStyle.SetColorInRange(0, len(noticeText), color.RGBA{R: 140, G: 100, B: 35, A: 255})
 		} else if r.internetState != "接続あり" && r.driveState != "検出済み" {
 			conclusionEnd := strings.IndexByte(noticeText, '\n')
@@ -978,7 +997,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			if conclusionEnd < len(noticeText) {
 				noticeStyle.SetColorInRange(conclusionEnd+1, len(noticeText), color.RGBA{R: 80, G: 80, B: 80, A: 255})
 			}
-		} else if r.internetState != "接続あり" || r.driveState != "検出済み" {
+		} else if r.internetState != "接続あり" || r.driveState != "検出済み" || r.discState != dvdMediaWritable {
 			conclusionEnd := strings.IndexByte(noticeText, '\n')
 			if conclusionEnd < 0 {
 				conclusionEnd = len(noticeText)
@@ -1120,9 +1139,9 @@ func (r *root) stopDVDExport() {
 
 func statusColor(status string) color.Color {
 	switch status {
-	case "接続あり", "検出済み":
+	case "接続あり", "検出済み", dvdMediaWritable:
 		return color.RGBA{R: 35, G: 135, B: 75, A: 255}
-	case "確認中…":
+	case "確認中…", dvdMediaUnknown, dvdMediaInsertedUnknown:
 		return color.RGBA{R: 175, G: 115, B: 20, A: 255}
 	default:
 		return color.RGBA{R: 185, G: 55, B: 55, A: 255}
@@ -1165,21 +1184,42 @@ func monitorEnvironment(checkResults chan environmentCheck) {
 	}
 }
 
-func environmentNotice(internet, drive string) string {
-	if internet == "確認中…" || drive == "確認中…" {
+func environmentNotice(internet, drive, disc string) string {
+	if internet == "確認中…" || drive == "確認中…" || disc == dvdMediaChecking {
 		return "必要な環境を確認しています…"
 	}
 	internetAvailable := internet == "接続あり"
 	driveAvailable := drive == "検出済み"
 	switch {
-	case internetAvailable && driveAvailable:
-		return "動画のダウンロードとDVDへの書き込みができます。"
 	case !internetAvailable && !driveAvailable:
-		return "現在の環境ではこのソフトを使用できません。\nインターネット接続がないため、YouTube動画をダウンロードできません。\nDVDドライブが未検出のため、DVDに書き込めません。ISOファイルへの書き出しは可能です。"
+		return "一部の機能を利用できません。\nインターネット接続がないため、YouTube動画をダウンロードできません。\nDVDドライブも未検出です。手元の動画ファイルからISOファイルを作成できます。"
 	case !internetAvailable:
-		return "一部の機能を利用できません。\nインターネット接続がないため、YouTube動画をダウンロードできません。\n手元の動画ファイルがあれば、DVDとISOファイルへの書き込みはできます。"
+		message := "一部の機能を利用できません。\nインターネット接続がないため、YouTube動画をダウンロードできません。\n手元の動画ファイルからISOファイルを作成できます。"
+		if disc != dvdMediaWritable {
+			message += "\n" + dvdDiscEnvironmentHint(disc)
+		}
+		return message
+	case !driveAvailable:
+		return "一部の機能を利用できません。\nDVDドライブが未検出のため、ディスクの状態を確認できません。\nYouTube動画のダウンロードとISOファイルの作成はできます。"
+	case disc != dvdMediaWritable:
+		return "一部の機能を利用できません。\n" + dvdDiscEnvironmentHint(disc) + "\nYouTube動画をダウンロードし、ISOファイルを作成できます。"
 	default:
-		return "一部の機能を利用できません。\nDVDドライブが未検出のため、DVDに書き込めません。ISOファイルへの書き出しは可能です。\nインターネット接続があるため、YouTube動画はダウンロードできます。"
+		return "インターネット接続と書き込み可能なDVDディスクを確認しました。\nYouTube動画をダウンロードし、ISOファイルを作成できます。\nDVDへの直接書き込みは現在利用できません。"
+	}
+}
+
+func dvdDiscEnvironmentHint(disc string) string {
+	switch disc {
+	case dvdMediaNoDisc:
+		return "DVDディスクが挿入されていないため、DVDへの書き込みはできません。"
+	case dvdMediaReadOnly:
+		return "挿入されたディスクは書き込みできないため、書き込み可能なDVDを入れてください。"
+	case dvdMediaInsertedUnknown:
+		return "ディスクは挿入されていますが、書き込み可否を確認できませんでした。ディスクとドライブを確認してください。"
+	case dvdMediaDriveAbsent:
+		return "DVDドライブが未検出のため、ディスクの状態を確認できません。"
+	default:
+		return "DVDディスクの書き込み可否を確認できませんでした。ディスクとドライブを確認してください。"
 	}
 }
 
@@ -1298,6 +1338,7 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 		case result := <-r.checks:
 			r.internetState = result.internet
 			r.driveState = result.drive
+			r.discState = result.disc
 			if result.internet != "接続あり" && r.qualityLoading {
 				if r.cancelQualityLookup != nil {
 					r.cancelQualityLookup()
@@ -1529,7 +1570,7 @@ func (r *root) clearConfirmedVideo() {
 }
 
 func checkEnvironment() environmentCheck {
-	result := environmentCheck{internet: "未接続", drive: "未検出"}
+	result := environmentCheck{internet: "未接続", drive: "未検出", disc: dvdMediaDriveAbsent}
 	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).Dial("tcp", "youtube.com:443")
 	if err == nil {
 		_ = conn.Close()
@@ -1537,6 +1578,7 @@ func checkEnvironment() environmentCheck {
 	}
 	if hasDVDDrive() {
 		result.drive = "検出済み"
+		result.disc = checkDVDMediaStatus()
 	}
 	return result
 }
@@ -1553,12 +1595,7 @@ func hasDVDDrive() bool {
 		text := strings.ToLower(string(output))
 		return strings.Contains(text, "dvd-write: yes") || strings.Contains(text, "cd-write: yes") || strings.Contains(text, "disc burning: yes")
 	case "linux":
-		for _, device := range []string{"/dev/cdrom", "/dev/dvd", "/dev/sr0", "/dev/sr1", "/dev/sr2", "/dev/sr3"} {
-			if _, err := os.Stat(device); err == nil {
-				return true
-			}
-		}
-		return false
+		return len(linuxOpticalDevices()) > 0
 	case "windows":
 		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 8*time.Second)
 		defer cancel()
@@ -1735,6 +1772,7 @@ func main() {
 		dvdExportProgresses:  make(chan dvdExportProgressUpdate, 1),
 		internetState:        "確認中…",
 		driveState:           "確認中…",
+		discState:            dvdMediaChecking,
 	}
 	go monitorEnvironment(checkResults)
 	runErr := guigui.Run(app, &guigui.RunOptions{Title: "YouTube to DVD", WindowSize: image.Pt(800, 520), WindowMinSize: image.Pt(600, 400)})
