@@ -3,7 +3,7 @@ module github.com/aethiopicuschan/youtube2dvd
 go 1.27.4
 
 require (
-	github.com/aethiopicuschan/video2dvd v0.4.0
+	github.com/aethiopicuschan/video2dvd v0.6.0
 	github.com/gravity-zero/mkvgo v0.66.2
 	github.com/guigui-gui/guigui v0.1.0
 	github.com/hajimehoshi/ebiten/v2 v2.10.4
@@ -30,13 +30,13 @@ require (
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect
 	github.com/josephspurrier/goversioninfo v1.7.0 // indirect
 	github.com/randall77/makefat v0.0.0-20260406194835-1b91746796b7 // indirect
-	github.com/rcarmo/go-264 v0.0.0-20260913215118-afd03f5c69ed // indirect
+	github.com/rcarmo/go-264 v0.0.0-20261008100743-cecca3835cbd // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/thesyncim/goav v0.0.0-20261021065620-74e15627cd11 // indirect
-	github.com/thesyncim/goav1 v0.0.0-20261017161534-cf11a8d2fa8c // indirect
+	github.com/thesyncim/goav1 v0.0.0-20261026121027-d4f0b81a139a // indirect
 	github.com/thesyncim/goh264 v0.0.0-20260714162114-14b36a2bfcc4 // indirect
-	github.com/thesyncim/gopus v0.2.3-0.20261017175526-c210548e8a92 // indirect
-	github.com/thesyncim/govpx v0.0.0-20261017170224-928b4e082477 // indirect
+	github.com/thesyncim/gopus v0.2.3 // indirect
+	github.com/thesyncim/govpx v0.0.0-20261018202535-159dce5b931a // indirect
 	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
