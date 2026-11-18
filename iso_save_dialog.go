@@ -9,7 +9,7 @@ import (
 	"github.com/ncruces/zenity"
 )
 
-func chooseISOOutputPath() (string, error) {
+func chooseISOOutputPath(title string) (string, error) {
 	directory, err := downloadDirectory()
 	if err != nil {
 		return "", err
@@ -18,7 +18,8 @@ func chooseISOOutputPath() (string, error) {
 		return "", fmt.Errorf("保存先フォルダーを作成できません: %w", err)
 	}
 
-	defaultPath := uniqueDownloadPath(directory, "youtube2dvd.iso")
+	defaultName := safeDownloadName(title) + ".iso"
+	defaultPath := uniqueDownloadPath(directory, defaultName)
 	selectedPath, err := zenity.SelectFileSave(
 		zenity.Title("ISOファイルの保存先を選択"),
 		zenity.Filename(defaultPath),

@@ -132,7 +132,7 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 		}
 		hadSaveError := c.dialog.saveError != ""
 		c.dialog.saveError = ""
-		outputPath, err := chooseISOOutputPath()
+		outputPath, err := chooseISOOutputPath(menuTitle)
 		if err != nil {
 			if !errors.Is(err, zenity.ErrCanceled) {
 				if strings.Contains(err.Error(), ".iso") {

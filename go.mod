@@ -3,7 +3,7 @@ module github.com/aethiopicuschan/youtube2dvd
 go 1.27.4
 
 require (
-	github.com/aethiopicuschan/video2dvd v0.2.1
+	github.com/aethiopicuschan/video2dvd v0.3.1
 	github.com/gravity-zero/mkvgo v0.66.2
 	github.com/guigui-gui/guigui v0.1.0
 	github.com/hajimehoshi/ebiten/v2 v2.10.4
@@ -14,6 +14,7 @@ require (
 require (
 	github.com/aethiopicuschan/go-vp9 v0.0.0-20261115145045-c2b2817f7f83 // indirect
 	github.com/akavel/rsrc v0.10.2 // indirect
+	github.com/arabian9ts/aac-go v0.1.0 // indirect
 	github.com/bitly/go-simplejson v0.5.1 // indirect
 	github.com/dchest/jsmin v1.0.0 // indirect
 	github.com/deploymenttheory/go-sdk-winmediafoundry v0.8.0 // indirect

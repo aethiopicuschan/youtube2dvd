@@ -2,10 +2,12 @@ github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAw
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/aethiopicuschan/go-vp9 v0.0.0-20261115145045-c2b2817f7f83 h1:zP7VNC7rYHB7TeVnUz2UtV/LeczqtcX73l8Ltm0vbQY=
 github.com/aethiopicuschan/go-vp9 v0.0.0-20261115145045-c2b2817f7f83/go.mod h1:00alyc82DTPTC8zwGk9kM2u1r8FP/WSiFWXdWAMbP7s=
-github.com/aethiopicuschan/video2dvd v0.2.1 h1:PmJuHvWo20e6uZ8rkfPn5tZFpQQtLmq5TQ1iZg9PGRQ=
-github.com/aethiopicuschan/video2dvd v0.2.1/go.mod h1:B6TaU1+dDvgrhF7qHZ6aRZYnWD7vBCazSaW+sV0aq9o=
+github.com/aethiopicuschan/video2dvd v0.3.1 h1:gmX1YPnCwGOw+InSCuJxyoLgHTdJ7Y/MS3PZZXitJIs=
+github.com/aethiopicuschan/video2dvd v0.3.1/go.mod h1:/5KlOTCAsV7JYPkf2pLGTIsTEqVVZlvdogkK8FKkmWU=
 github.com/akavel/rsrc v0.10.2 h1:Zxm8V5eI1hW4gGaYsJQUhxpjkENuG91ki8B4zCrvEsw=
 github.com/akavel/rsrc v0.10.2/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
+github.com/arabian9ts/aac-go v0.1.0 h1:e298pHWu+Xcv6VPU2hmS1UTmOq5C9KHD38eQcJR4K8c=
+github.com/arabian9ts/aac-go v0.1.0/go.mod h1:nQwjBOjeee+zm6JSmEd9yk1uUoyYFrvhJXYnWDsNXpU=
 github.com/bitly/go-simplejson v0.5.1 h1:xgwPbetQScXt1gh9BmoJ6j9JMr3TElvuIyjR8pgdoow=
 github.com/bitly/go-simplejson v0.5.1/go.mod h1:YOPVLzCfwK14b4Sff3oP1AmGhI9T9Vsg84etUnlyp+Q=
 github.com/dchest/jsmin v1.0.0 h1:Y2hWXmGZiRxtl+VcTksyucgTlYxnhPzTozCwx9gy9zI=
