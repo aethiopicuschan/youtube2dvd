@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # =========================================================
+  # 1. Analyze diff（only fetch-depth:0）
+  # =========================================================
+  changes:
+    runs-on: ubuntu-slim
+    timeout-minutes: 3
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      go_files: ${{ steps.diff.outputs.go_files }}
+      go_count: ${{ steps.diff.outputs.go_count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+
+      - name: Compute Go diff (FAST)
+        id: diff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EVENT_NAME="${{ github.event_name }}"
+          HEAD_SHA="${{ github.sha }}"
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            START_SHA="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          else
+            BASE_SHA="${{ github.event.before }}"
+
+            if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+              START_SHA="${HEAD_SHA}~1"
+            else
+              START_SHA="$BASE_SHA"
+            fi
+          fi
+
+          FILES="$(git diff --name-only "$START_SHA" "$HEAD_SHA" | grep '\.go$' || true)"
+          COUNT="$(echo "$FILES" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+          {
+            echo "go_files<<EOF"
+            echo "$FILES"
+            echo "EOF"
+            echo "go_count=$COUNT"
+          } >> "$GITHUB_OUTPUT"
+
+  # =========================================================
+  # 2. Fast Go
+  # =========================================================
+  fast-go:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Go tools
+        run: |
+          command -v staticcheck >/dev/null || \
+            go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+          command -v modernize >/dev/null || \
+            go install golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.49.0
+
+      # ---- gofmt
+      - name: gofmt
+        run: |
+          test -z "$(gofmt -l .)"
+
+      # ---- staticcheck
+      - name: staticcheck
+        run: |
+          pkgs=$(go list ./... | grep -vE '(^|/)(gen)($|/)')
+          staticcheck $pkgs
+
+      # ---- Go Imports Ruler
+      - name: Go Imports Ruler Check
+        uses: aethiopicuschan/goimportsruler@v1.1.1
+        with:
+          args: "."
+
+      # ---- Go modernizer
+      - name: Go Modernizer Check
+        run: |
+          pkgs=$(go list ./... | grep -vE '(^|/)(gen)($|/)')
+          modernize -errorsastype=false $pkgs
+
+      # ---- Go mod tidy
+      - name: Go mod tidy check
+        run: go mod tidy -diff
+
+      # ---- Go mod verify
+      - name: Go mod verify check
+        run: go mod verify
+
+  # =========================================================
+  # 3. Go test（If lint passed only）
+  # =========================================================
+  go-test:
+    needs: fast-go
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run unit tests
+        run: go test ./... -count=1
+
+  # =========================================================
+  # 4. Fast security
+  # =========================================================
+  fast-security:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ---- typos
+      - uses: crate-ci/typos@v1.39.2
+
+      # ---- gitleaks
+      - name: Install gitleaks
+        run: |
+          set -e
+          VERSION=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+            | grep -oP '"tag_name":\s*"v\K[0-9.]+' )
+          echo "Installing gitleaks v$VERSION"
+          curl -sSL \
+            https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz \
+            -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Run gitleaks (latest commit only)
+        run: gitleaks detect --no-git --verbose --config .gitleaks.toml
+
+    # ---- License check
+      - name: Install go-licenses
+        run: |
+          go install github.com/google/go-licenses/v2@v2.0.1
+
+      - name: Check licenses
+        # These package licenses are recorded in the generated manifest; go-licenses
+        # cannot classify the bundled Lucent and OFL texts during its check command.
+        run: |
+          go-licenses check . \
+            --ignore=github.com/dop251/goja/ftoa \
+            --ignore=github.com/guigui-gui/guigui/basicwidget \
+            --allowed_licenses=Apache-2.0,BSD-2-Clause,BSD-3-Clause,MIT,OFL-1.1,Unlicense,LicenseRef-MIT-Lucent
+
+      - name: Validate generated licenses
+        run: go run ./cmd/validate-licenses internal/licenses/generated/licenses.json
+
+      - name: Build
+        run: mkdir -p dist && go build -o dist/app .

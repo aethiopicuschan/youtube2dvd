@@ -1,0 +1,18 @@
+{
+  "packages": [
+    {{- $first := true }}
+    {{- range $p := . }}
+    {{- if ne $p.Name "github.com/aethiopicuschan/youtube2dvd" }}
+    {{- if not $first }},{{ end }}
+    {
+      "name": {{ printf "%q" $p.Name }},
+      "version": {{ printf "%q" $p.Version }},
+      "license": {{ printf "%q" $p.LicenseName }},
+      "license_url": {{ printf "%q" $p.LicenseURL }},
+      "text": {{ printf "%q" $p.LicenseText }}
+    }
+    {{- $first = false }}
+    {{- end }}
+    {{- end }}
+  ]
+}

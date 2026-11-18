@@ -1,0 +1,14 @@
+title = "YouTube To DVD Gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known placeholder credentials in README examples"
+condition = "AND"
+paths = ['''(^|/)README\.md$''']
+regexTarget = "secret"
+regexes = [
+  '''[c]afebabe:deadbeef''',
+  '''[8]ae31cacf141669ddfb5da''',
+]
