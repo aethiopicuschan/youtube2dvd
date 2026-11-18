@@ -323,9 +323,6 @@ func (c *environmentCard) Build(context *guigui.Context, adder *guigui.ChildAdde
 	c.heading.SetValue(c.label)
 	c.value.SetValue(c.status)
 	hintText := c.hintText
-	if hintText == "" {
-		hintText = statusHint(c.status)
-	}
 	c.hint.SetValue(hintText)
 	c.heading.SetSelectable(false)
 	c.value.SetSelectable(false)
