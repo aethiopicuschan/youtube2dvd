@@ -321,8 +321,8 @@ func splitDVDWriterLines(data []byte, atEOF bool) (advance int, token []byte, er
 
 func dvdWriterPercent(line string) (int, bool) {
 	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "PROGRESS|") {
-		value := strings.TrimSpace(strings.TrimPrefix(line, "PROGRESS|"))
+	if value, ok := strings.CutPrefix(line, "PROGRESS|"); ok {
+		value = strings.TrimSpace(value)
 		percent, err := strconv.Atoi(value)
 		return percent, err == nil
 	}

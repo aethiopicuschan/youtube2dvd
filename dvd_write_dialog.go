@@ -111,6 +111,7 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	c.menuTitleText.SetSelectable(false)
 	c.menuTitleText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	c.menuTitle.SetPlaceholder("タイトル")
+	context.SetEnabled(&c.menuTitle, !c.dialog.busy)
 	hasMenuTitle := strings.TrimSpace(c.menuTitle.Value()) != ""
 	note := dvdWriteReadinessMessage(c.dialog.driveState, c.dialog.discState)
 	if c.dialog.saveError != "" {
@@ -137,10 +138,10 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 		c.dialog.onBurnDVD(menuTitle)
 	})
 	c.isoButton.SetText("ISOファイルとして保存する")
-	context.SetEnabled(&c.isoButton, hasMenuTitle && len(c.dialog.queue) > 0 && c.dialog.onSaveISO != nil)
+	context.SetEnabled(&c.isoButton, hasMenuTitle && len(c.dialog.queue) > 0 && !c.dialog.busy && c.dialog.onSaveISO != nil)
 	c.isoButton.OnDown(func(_ *guigui.Context) {
 		menuTitle := strings.TrimSpace(c.menuTitle.Value())
-		if menuTitle == "" || c.dialog.onSaveISO == nil || len(c.dialog.queue) == 0 {
+		if menuTitle == "" || c.dialog.busy || c.dialog.onSaveISO == nil || len(c.dialog.queue) == 0 {
 			return
 		}
 		hadSaveError := c.dialog.saveError != ""
@@ -163,7 +164,11 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 		c.dialog.onSaveISO(menuTitle, outputPath)
 	})
 	c.cancelButton.SetText("キャンセル")
+	context.SetEnabled(&c.cancelButton, !c.dialog.busy)
 	c.cancelButton.OnDown(func(_ *guigui.Context) {
+		if c.dialog.busy {
+			return
+		}
 		c.dialog.SetOpen(false)
 	})
 	return nil

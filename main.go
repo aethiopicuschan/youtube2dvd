@@ -59,7 +59,7 @@ type root struct {
 	dvdActionButton      basicwidget.Button
 	dvdActionTooltip     basicwidget.TooltipArea
 	dvdWriteDialog       dvdWriteDialog
-	dvdExportProgressBar basicwidget.ProgressBar
+	dvdProgressDialog    dvdProgressDialog
 	dvdExportStatus      basicwidget.Text
 	urlLabel             basicwidget.Text
 	urlInput             basicwidget.TextInput
@@ -100,6 +100,8 @@ type root struct {
 	dvdExportResults     chan dvdExportResult
 	dvdExportProgresses  chan dvdExportProgressUpdate
 	dvdExportInFlight    bool
+	dvdExportIsBurn      bool
+	dvdExportCanceling   bool
 	dvdExportMessage     string
 	dvdExportProgress    int
 	dvdExportETA         string
@@ -248,6 +250,9 @@ func (r *root) refreshDVDVideoFiles() {
 }
 
 func (r *root) handleDVDVideoClick(path string) {
+	if r.dvdExportInFlight {
+		return
+	}
 	now := time.Now()
 	if r.lastDVDVideoClick == path && now.Sub(r.lastDVDVideoClickAt) <= 500*time.Millisecond {
 		r.dvdWriteQueue = append(r.dvdWriteQueue, path)
@@ -262,6 +267,9 @@ func (r *root) handleDVDVideoClick(path string) {
 }
 
 func (r *root) handleDVDQueueClick(path string) {
+	if r.dvdExportInFlight {
+		return
+	}
 	now := time.Now()
 	if r.lastDVDQueueClick == path && now.Sub(r.lastDVDQueueClickAt) <= 500*time.Millisecond {
 		for i, queuedPath := range r.dvdWriteQueue {
@@ -531,9 +539,24 @@ func (r *licenseRow) Measure(context *guigui.Context, constraints guigui.Constra
 }
 
 func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
+	progressTitle := "ISOファイルを保存しています"
+	if r.dvdExportIsBurn {
+		progressTitle = "DVDを書き込んでいます"
+	}
+	r.dvdProgressDialog.title = progressTitle
+	r.dvdProgressDialog.message = r.dvdExportMessage
+	r.dvdProgressDialog.progress = r.dvdExportProgress
+	r.dvdProgressDialog.eta = r.dvdExportETA
+	r.dvdProgressDialog.canceling = r.dvdExportCanceling
+	r.dvdProgressDialog.onCancel = r.cancelDVDOperation
+	r.dvdProgressDialog.SetOpen(r.dvdExportInFlight)
+
 	r.home.label = "ホーム"
-	r.home.enabled = true
+	r.home.enabled = !r.dvdExportInFlight
 	r.home.activate = func() {
+		if r.dvdExportInFlight {
+			return
+		}
 		r.showDownloads = false
 		r.showDVDWriting = false
 		r.showLicenses = false
@@ -541,7 +564,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		guigui.RequestRebuild()
 	}
 	r.downloads.label = "ダウンロード"
-	r.downloads.enabled = r.internetState == "接続あり"
+	r.downloads.enabled = r.internetState == "接続あり" && !r.dvdExportInFlight
 	var disabledReasons []string
 	if r.internetState == "確認中…" {
 		disabledReasons = append(disabledReasons, "環境を確認しています")
@@ -552,6 +575,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	}
 	r.downloads.disabledReason = strings.Join(disabledReasons, "\n")
 	r.downloads.activate = func() {
+		if r.dvdExportInFlight {
+			return
+		}
 		r.showDownloads = true
 		r.showDVDWriting = false
 		r.showLicenses = false
@@ -559,9 +585,12 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		guigui.RequestRebuild()
 	}
 	r.dvdWriting.label = "書き込み"
-	r.dvdWriting.enabled = true
+	r.dvdWriting.enabled = !r.dvdExportInFlight
 	r.dvdWriting.disabledReason = ""
 	r.dvdWriting.activate = func() {
+		if r.dvdExportInFlight {
+			return
+		}
 		r.refreshDVDVideoFiles()
 		r.showDVDWriting = true
 		r.showDownloads = false
@@ -570,8 +599,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		guigui.RequestRebuild()
 	}
 	r.manualMenu.label = "取扱説明書"
-	r.manualMenu.enabled = true
+	r.manualMenu.enabled = !r.dvdExportInFlight
 	r.manualMenu.activate = func() {
+		if r.dvdExportInFlight {
+			return
+		}
 		r.showManual = true
 		r.showDownloads = false
 		r.showDVDWriting = false
@@ -579,7 +611,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		guigui.RequestRebuild()
 	}
 	r.nav.label = "Licenses"
-	r.nav.enabled = true
+	r.nav.enabled = !r.dvdExportInFlight
 	const mitLabel = "MIT License"
 	const appLabel = "YouTube To DVD "
 	aboutText := appLabel + version + "\nMIT License\nCopyright (c) 2026 Chan Aethiopicus"
@@ -605,6 +637,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	}
 	r.about.SetOverrideStyles(&mitLinkStyle, false)
 	r.about.OnHotspotUp(func(_ *guigui.Context, textRange basicwidget.TextRange) {
+		if r.dvdExportInFlight {
+			return
+		}
 		target := ""
 		switch textRange.StartInBytes {
 		case appStart:
@@ -619,6 +654,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 	})
 	r.nav.activate = func() {
+		if r.dvdExportInFlight {
+			return
+		}
 		r.showLicenses = true
 		r.showDownloads = false
 		r.showDVDWriting = false
@@ -868,6 +906,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.dvdVideoList.SetStripeVisible(true)
 		r.dvdVideoList.SetItems(videoItems)
 		r.dvdVideoList.OnItemSelected(func(_ *guigui.Context, index int) {
+			if r.dvdExportInFlight {
+				return
+			}
 			if item, ok := r.dvdVideoList.ItemByIndex(index); ok && item.Value != "" {
 				r.selectedDVDVideo = item.Value
 				guigui.RequestRebuild()
@@ -876,6 +917,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		if r.selectedDVDVideo != "" {
 			r.dvdVideoList.SelectItemByValue(r.selectedDVDVideo)
 		}
+		context.SetEnabled(&r.dvdVideoList, !r.dvdExportInFlight)
 		queueItems := make([]basicwidget.ListItem[string], 0, max(1, len(r.dvdWriteQueue)))
 		for _, path := range r.dvdWriteQueue {
 			for _, file := range r.dvdVideoFiles {
@@ -898,6 +940,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.dvdQueueList.SetStyle(basicwidget.ListStyleNormal)
 		r.dvdQueueList.SetStripeVisible(true)
 		r.dvdQueueList.SetItems(queueItems)
+		context.SetEnabled(&r.dvdQueueList, !r.dvdExportInFlight)
 		r.dvdActionButton.SetText("")
 		r.dvdActionButton.SetIcon(dvdActionIcon(context))
 		tooltipText := "書き込み方法を選択"
@@ -930,9 +973,6 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			r.dvdWriteDialog.SetOpen(true)
 			guigui.RequestRebuild()
 		})
-		r.dvdExportProgressBar.SetMinimumValue(0)
-		r.dvdExportProgressBar.SetMaximumValue(100)
-		r.dvdExportProgressBar.SetValue(r.dvdExportProgress)
 		exportStatus := r.dvdExportMessage
 		if r.dvdExportETA != "" {
 			exportStatus += "\n" + r.dvdExportETA
@@ -1030,6 +1070,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.divider)
 	adder.AddWidget(&r.about)
 	adder.AddWidget(&r.dvdWriteDialog)
+	adder.AddWidget(&r.dvdProgressDialog)
 	adder.AddWidget(&r.title)
 	if r.showLicenses {
 		adder.AddWidget(&r.list)
@@ -1074,10 +1115,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		adder.AddWidget(&r.dvdQueueList)
 		adder.AddWidget(&r.dvdActionButton)
 		adder.AddWidget(&r.dvdActionTooltip)
-		if r.dvdExportMessage != "" {
-			if r.dvdExportInFlight {
-				adder.AddWidget(&r.dvdExportProgressBar)
-			}
+		if r.dvdExportMessage != "" && !r.dvdExportInFlight {
 			adder.AddWidget(&r.dvdExportStatus)
 		}
 	} else {
@@ -1113,6 +1151,8 @@ func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
 	queue := append([]string(nil), r.dvdWriteQueue...)
 	estimatedBytes, _ := dvdISOSizeEstimate(queue, r.dvdVideoFiles)
 	r.dvdExportInFlight = true
+	r.dvdExportIsBurn = burn
+	r.dvdExportCanceling = false
 	r.dvdExportMessage = "動画を確認しています…"
 	if burn {
 		r.dvdExportMessage = "DVDディスクを再確認しています…"
@@ -1125,6 +1165,7 @@ func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
 	done := make(chan struct{})
 	r.dvdExportCancel = cancel
 	r.dvdExportDone = done
+	r.dvdProgressDialog.SetOpen(true)
 	progress := func(update dvdExportProgressUpdate) {
 		select {
 		case r.dvdExportProgresses <- update:
@@ -1164,6 +1205,15 @@ func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
 		}
 		r.dvdExportResults <- dvdExportResult{path: path, err: err, burned: burn && err == nil, burnFailure: burnFailure}
 	}()
+	guigui.RequestRebuild()
+}
+
+func (r *root) cancelDVDOperation() {
+	if !r.dvdExportInFlight || r.dvdExportCanceling || r.dvdExportCancel == nil {
+		return
+	}
+	r.dvdExportCanceling = true
+	r.dvdExportCancel()
 	guigui.RequestRebuild()
 }
 
@@ -1338,7 +1388,7 @@ func validateYouTubeURL(value string) string {
 
 func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	updated := false
-	if r.dvdExportInFlight && r.dvdExportConverting {
+	if r.dvdExportInFlight && r.dvdExportConverting && !r.dvdExportCanceling {
 		eta := r.dvdExportETAEstimate.Label(time.Now())
 		if eta != r.dvdExportETA {
 			r.dvdExportETA = eta
@@ -1491,7 +1541,7 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 		for {
 			select {
 			case progress := <-r.dvdExportProgresses:
-				if r.dvdExportInFlight {
+				if r.dvdExportInFlight && !r.dvdExportCanceling {
 					if progress.message != "" {
 						r.dvdExportMessage = progress.message
 						if strings.Contains(progress.message, "を変換しています…") {
@@ -1528,15 +1578,21 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	if r.dvdExportResults != nil {
 		select {
 		case result := <-r.dvdExportResults:
+			wasCanceled := r.dvdExportCanceling && result.err != nil
 			r.dvdExportInFlight = false
+			r.dvdExportCanceling = false
 			r.dvdExportConverting = false
 			r.dvdExportETA = ""
 			r.dvdExportETAEstimate.Reset()
+			r.dvdProgressDialog.SetOpen(false)
 			if r.dvdExportCancel != nil {
 				r.dvdExportCancel()
 				r.dvdExportCancel = nil
 			}
-			if result.err != nil {
+			if wasCanceled || errors.Is(result.err, stdcontext.Canceled) {
+				r.dvdExportMessage = "処理をキャンセルしました。"
+				r.dvdExportProgress = 0
+			} else if result.err != nil {
 				if result.burnFailure {
 					r.dvdExportMessage = dvdBurnFailureMessage(result.err)
 				} else {
@@ -1654,6 +1710,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	u := basicwidget.UnitSize(context)
 	layouter.LayoutWidget(&r.background, b)
 	layouter.LayoutWidget(&r.dvdWriteDialog, b)
+	layouter.LayoutWidget(&r.dvdProgressDialog, b)
 	sidebarWidth := 9 * u
 	layouter.LayoutWidget(&r.sidebar, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Max.Y))
 	layouter.LayoutWidget(&r.home, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Min.Y+2*u))
@@ -1679,11 +1736,8 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		layouter.LayoutWidget(&r.dvdQueueHeading, image.Rect(content.Min.X, queueTop, content.Max.X-estimateWidth, queueTop+u))
 		layouter.LayoutWidget(&r.dvdQueueEstimate, image.Rect(content.Max.X-estimateWidth, queueTop, content.Max.X, queueTop+u))
 		statusHeight := 0
-		if r.dvdExportMessage != "" {
+		if r.dvdExportMessage != "" && !r.dvdExportInFlight {
 			statusHeight = 2 * u
-			if r.dvdExportETA != "" {
-				statusHeight = 3 * u
-			}
 		}
 		queueListBottom := content.Max.Y - statusHeight
 		buttonWidth := 3 * u / 2
@@ -1692,11 +1746,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		layouter.LayoutWidget(&r.dvdQueueList, image.Rect(content.Min.X, queueListTop, buttonLeft-u/4, queueListBottom))
 		layouter.LayoutWidget(&r.dvdActionButton, buttonBounds)
 		layouter.LayoutWidget(&r.dvdActionTooltip, buttonBounds)
-		if r.dvdExportInFlight {
-			progressHeight := u / 2
-			layouter.LayoutWidget(&r.dvdExportProgressBar, image.Rect(content.Min.X, queueListBottom, content.Max.X, queueListBottom+progressHeight))
-			layouter.LayoutWidget(&r.dvdExportStatus, image.Rect(content.Min.X, queueListBottom+progressHeight, content.Max.X, content.Max.Y))
-		} else {
+		if r.dvdExportMessage != "" && !r.dvdExportInFlight {
 			layouter.LayoutWidget(&r.dvdExportStatus, image.Rect(content.Min.X, queueListBottom, content.Max.X, content.Max.Y))
 		}
 	} else if !r.showDownloads {

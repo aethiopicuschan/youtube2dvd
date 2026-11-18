@@ -47,10 +47,10 @@ func parseDrutilDVDMediaStatus(output string) string {
 	inserted := false
 	knownWritableState := false
 	unknownWritableState := false
-	for _, block := range strings.Split(output, "\n\n") {
+	for block := range strings.SplitSeq(output, "\n\n") {
 		mediaType := ""
 		writability := ""
-		for _, line := range strings.Split(block, "\n") {
+		for line := range strings.SplitSeq(block, "\n") {
 			key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 			if !ok {
 				continue
@@ -186,7 +186,7 @@ func linuxOpticalDevices() []string {
 
 func parseUdevProperties(output string) map[string]string {
 	properties := make(map[string]string)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if ok {
 			properties[key] = value
