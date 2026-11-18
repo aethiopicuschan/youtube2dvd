@@ -51,7 +51,8 @@ type dvdProgressDialogContent struct {
 	heading  basicwidget.Text
 	status   basicwidget.Text
 	progress basicwidget.ProgressBar
-	details  basicwidget.Text
+	percent  basicwidget.Text
+	eta      basicwidget.Text
 	cancel   basicwidget.Button
 }
 
@@ -60,7 +61,8 @@ func (c *dvdProgressDialogContent) Build(context *guigui.Context, adder *guigui.
 		&c.heading,
 		&c.status,
 		&c.progress,
-		&c.details,
+		&c.percent,
+		&c.eta,
 		&c.cancel,
 	} {
 		adder.AddWidget(widget)
@@ -73,9 +75,17 @@ func (c *dvdProgressDialogContent) Build(context *guigui.Context, adder *guigui.
 	c.progress.SetMinimumValue(0)
 	c.progress.SetMaximumValue(100)
 	c.progress.SetValue(min(100, max(0, c.dialog.progress)))
-	c.details.SetValue(c.progressDetails())
-	c.details.SetSelectable(false)
-	c.details.SetHorizontalAlign(basicwidget.HorizontalAlignEnd)
+	c.percent.SetValue("進捗：" + strconv.Itoa(min(100, max(0, c.dialog.progress))) + "%")
+	c.percent.SetSelectable(false)
+	c.percent.SetHorizontalAlign(basicwidget.HorizontalAlignStart)
+	eta := c.dialog.eta
+	if c.dialog.canceling {
+		eta = ""
+	}
+	c.eta.SetValue(eta)
+	c.eta.SetSelectable(false)
+	c.eta.SetWrapMode(basicwidget.WrapModeNone)
+	c.eta.SetHorizontalAlign(basicwidget.HorizontalAlignStart)
 	c.cancel.SetText("キャンセル")
 	if c.dialog.canceling {
 		c.cancel.SetText("キャンセル中…")
@@ -101,14 +111,6 @@ func (c *dvdProgressDialogContent) statusText() {
 	c.status.SetSelectable(false)
 }
 
-func (c *dvdProgressDialogContent) progressDetails() string {
-	text := "進捗：" + strconv.Itoa(min(100, max(0, c.dialog.progress))) + "%"
-	if c.dialog.eta != "" && !c.dialog.canceling {
-		text += "　" + c.dialog.eta
-	}
-	return text
-}
-
 func (c *dvdProgressDialogContent) Measure(context *guigui.Context, _ guigui.Constraints) image.Point {
 	u := basicwidget.UnitSize(context)
 	app := context.AppBounds()
@@ -129,7 +131,9 @@ func (c *dvdProgressDialogContent) Layout(context *guigui.Context, bounds *guigu
 
 	progressTop := statusTop + u + u/2
 	layouter.LayoutWidget(&c.progress, image.Rect(x, progressTop, x+width, progressTop+u/2))
-	layouter.LayoutWidget(&c.details, image.Rect(x, progressTop+u/2, x+width, progressTop+3*u/2))
+	detailsTop := progressTop + u/2
+	layouter.LayoutWidget(&c.percent, image.Rect(x, detailsTop, x+6*u, detailsTop+u))
+	layouter.LayoutWidget(&c.eta, image.Rect(x+7*u, detailsTop, x+width, detailsTop+u))
 
 	buttonWidth := 6 * u
 	buttonTop := b.Max.Y - u - u/3
