@@ -124,20 +124,20 @@ func windowsScriptHost() (string, error) {
 func burnDVDISOWindows(ctx stdcontext.Context, isoPath string, progress dvdExportProgressReporter) error {
 	script, err := os.CreateTemp("", "youtube2dvd-burn-*.vbs")
 	if err != nil {
-		return fmt.Errorf("Windowsの書き込みスクリプトを作成できません: %w", err)
+		return fmt.Errorf("書き込み用スクリプトを作成できません（Windows）: %w", err)
 	}
 	scriptPath := script.Name()
 	defer os.Remove(scriptPath)
 	if _, err := io.WriteString(script, windowsDVDBurnScript); err != nil {
 		_ = script.Close()
-		return fmt.Errorf("Windowsの書き込みスクリプトを保存できません: %w", err)
+		return fmt.Errorf("書き込み用スクリプトを保存できません（Windows）: %w", err)
 	}
 	if err := script.Close(); err != nil {
-		return fmt.Errorf("Windowsの書き込みスクリプトを閉じられません: %w", err)
+		return fmt.Errorf("書き込み用スクリプトを閉じられません（Windows）: %w", err)
 	}
 	host, err := windowsScriptHost()
 	if err != nil {
-		return fmt.Errorf("Windows Script Hostを利用できません: %w", err)
+		return fmt.Errorf("スクリプトホストを利用できません（Windows Script Host）: %w", err)
 	}
 	return runDVDWriterCommand(ctx, host, []string{"//NoLogo", scriptPath, isoPath}, progress)
 }

@@ -1189,17 +1189,6 @@ func statusColor(status string) color.Color {
 	}
 }
 
-func statusHint(status string) string {
-	switch status {
-	case "未接続":
-		return "インターネット接続がないため、YouTube動画を取得できません。"
-	case "未検出":
-		return "DVDドライブが未検出のため、DVDに書き込めません。"
-	default:
-		return ""
-	}
-}
-
 const environmentCheckInterval = 30 * time.Second
 const helpAutoAdvanceInterval = 15 * time.Second
 
