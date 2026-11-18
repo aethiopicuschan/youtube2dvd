@@ -8,6 +8,8 @@
 	<string>YouTube to DVD</string>
 	<key>CFBundleExecutable</key>
 	<string>youtube2dvd</string>
+	<key>CFBundleIconFile</key>
+	<string>icon.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.github.aethiopicuschan.youtube2dvd</string>
 	<key>CFBundleInfoDictionaryVersion</key>

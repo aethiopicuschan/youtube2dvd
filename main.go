@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	stdcontext "context"
 	"embed"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"io/fs"
 	"log"
 	"net"
@@ -32,6 +34,9 @@ var version = "v0.0.0-dev"
 
 //go:embed help/*.txt manual/*.txt
 var embeddedHelp embed.FS
+
+//go:embed icon/icon.png
+var embeddedAppIcon []byte
 
 type root struct {
 	guigui.DefaultWidget
@@ -1776,6 +1781,12 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 }
 
 func main() {
+	appIcon, err := png.Decode(bytes.NewReader(embeddedAppIcon))
+	if err != nil {
+		log.Fatal(err)
+	}
+	ebiten.SetWindowIcon([]image.Image{appIcon})
+
 	repo, err := licenses.NewRepository()
 	if err != nil {
 		log.Fatal(err)
