@@ -297,10 +297,10 @@ func dvdExportFailureMessage(err error) string {
 	return "ISOファイルの作成に失敗しました。\n原因：" + message
 }
 
-func exportDVDISO(queue []string, estimatedBytes int64, menuTitle string, progress dvdExportProgressReporter) (outputPath string, exportErr error) {
+func exportDVDISO(queue []string, estimatedBytes int64, menuTitle, outputPath string, progress dvdExportProgressReporter) (finalPath string, exportErr error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			outputPath = ""
+			finalPath = ""
 			exportErr = fmt.Errorf("DVD/ISO変換中に予期しないエラーが発生しました: %v", recovered)
 		}
 	}()
@@ -311,12 +311,12 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle string, progre
 		return "", fmt.Errorf("DVD-Videoに登録できる動画は99件までです")
 	}
 
-	directory, err := downloadDirectory()
-	if err != nil {
-		return "", err
+	if strings.TrimSpace(outputPath) == "" {
+		return "", fmt.Errorf("ISOファイルの保存先が指定されていません")
 	}
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return "", fmt.Errorf("保存先フォルダーを作成できません: %w", err)
+	outputPath, err := filepath.Abs(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("ISOファイルの保存先を確認できません: %w", err)
 	}
 
 	inputs := make([]string, 0, len(queue))
@@ -366,7 +366,7 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle string, progre
 		estimatedBytes = dvdISOSizeEstimateFromInputs(inputs)
 	}
 
-	stageDir, err := os.MkdirTemp(directory, ".youtube2dvd-export-")
+	stageDir, err := os.MkdirTemp(filepath.Dir(outputPath), ".youtube2dvd-export-")
 	if err != nil {
 		return "", fmt.Errorf("ISO作成用の一時フォルダを作成できません: %w", err)
 	}
@@ -386,7 +386,6 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle string, progre
 	if err != nil {
 		return "", fmt.Errorf("DVD変換器を準備できません: %w", err)
 	}
-	outputPath = uniqueDownloadPath(directory, "youtube2dvd.iso")
 	discPath := filepath.Join(stageDir, "disc")
 	options := video2dvd.Options{
 		Standard:  video2dvd.VideoStandardNTSC,
@@ -409,10 +408,48 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle string, progre
 	if err := video2dvd.WriteDVDISO(context.Background(), filepath.Join(discPath, "VIDEO_TS"), stagedISO); err != nil {
 		return "", err
 	}
-	if err := os.Rename(stagedISO, outputPath); err != nil {
+	if err := replaceISOFile(stagedISO, outputPath); err != nil {
 		return "", fmt.Errorf("完成したISOファイルを保存できません: %w", err)
 	}
 	return outputPath, nil
+}
+
+func replaceISOFile(stagedPath, outputPath string) error {
+	info, err := os.Lstat(outputPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if info.IsDir() || (!info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0) {
+			return fmt.Errorf("保存先にファイル以外が存在します")
+		}
+	}
+
+	backupDir := ""
+	if err == nil {
+		backupDir, err = os.MkdirTemp(filepath.Dir(outputPath), ".youtube2dvd-backup-")
+		if err != nil {
+			return fmt.Errorf("既存ファイルを保護できません: %w", err)
+		}
+		backupPath := filepath.Join(backupDir, filepath.Base(outputPath))
+		if err := os.Rename(outputPath, backupPath); err != nil {
+			_ = os.RemoveAll(backupDir)
+			return err
+		}
+
+		if err := os.Rename(stagedPath, outputPath); err != nil {
+			restoreErr := os.Rename(backupPath, outputPath)
+			_ = os.RemoveAll(backupDir)
+			if restoreErr != nil {
+				return fmt.Errorf("保存に失敗し、既存ファイルも復元できませんでした: %w (復元エラー: %v)", err, restoreErr)
+			}
+			return err
+		}
+		_ = os.RemoveAll(backupDir)
+		return nil
+	}
+
+	return os.Rename(stagedPath, outputPath)
 }
 
 func copyDVDExportInput(source, target string) error {

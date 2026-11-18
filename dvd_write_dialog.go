@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"image"
+	"image/color"
 	"strings"
 
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
+	"github.com/ncruces/zenity"
 )
 
 type dvdWriteDialog struct {
@@ -16,7 +19,8 @@ type dvdWriteDialog struct {
 
 	queue     []dvdVideoFile
 	estimate  string
-	onSaveISO func(menuTitle string)
+	onSaveISO func(menuTitle, outputPath string)
+	saveError string
 }
 
 func (d *dvdWriteDialog) SetQueue(queue []dvdVideoFile, estimate string) {
@@ -104,9 +108,18 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	c.menuTitleText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	c.menuTitle.SetPlaceholder("タイトル")
 	hasMenuTitle := strings.TrimSpace(c.menuTitle.Value()) != ""
-	c.burnNote.SetValue("DVDへの書き込みは現在利用できません。")
+	note := "DVDへの書き込みは現在利用できません。"
+	if c.dialog.saveError != "" {
+		note = c.dialog.saveError
+	}
+	c.burnNote.SetValue(note)
 	c.burnNote.SetSelectable(false)
 	c.burnNote.SetWrapMode(basicwidget.WrapModeNormal)
+	var noteStyle basicwidget.TextStyles
+	if c.dialog.saveError != "" {
+		noteStyle.SetColorInRange(0, len(note), color.RGBA{R: 185, G: 45, B: 45, A: 255})
+	}
+	c.burnNote.SetOverrideStyles(&noteStyle, false)
 	c.burnButton.SetText("DVDに書き込む")
 	const directDVDWritingAvailable = false
 	context.SetEnabled(&c.burnButton, hasMenuTitle && directDVDWritingAvailable)
@@ -117,8 +130,24 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 		if menuTitle == "" || c.dialog.onSaveISO == nil || len(c.dialog.queue) == 0 {
 			return
 		}
+		hadSaveError := c.dialog.saveError != ""
+		c.dialog.saveError = ""
+		outputPath, err := chooseISOOutputPath()
+		if err != nil {
+			if !errors.Is(err, zenity.ErrCanceled) {
+				if strings.Contains(err.Error(), ".iso") {
+					c.dialog.saveError = err.Error() + "。"
+				} else {
+					c.dialog.saveError = "ISOファイルの保存先を選択できませんでした。"
+				}
+			}
+			if hadSaveError || c.dialog.saveError != "" {
+				guigui.RequestRebuild()
+			}
+			return
+		}
 		c.dialog.SetOpen(false)
-		c.dialog.onSaveISO(menuTitle)
+		c.dialog.onSaveISO(menuTitle, outputPath)
 	})
 	c.cancelButton.SetText("キャンセル")
 	c.cancelButton.OnDown(func(_ *guigui.Context) {

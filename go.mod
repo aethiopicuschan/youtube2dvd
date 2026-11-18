@@ -8,11 +8,14 @@ require (
 	github.com/guigui-gui/guigui v0.1.0
 	github.com/hajimehoshi/ebiten/v2 v2.10.4
 	github.com/kkdai/youtube/v2 v2.10.8
+	github.com/ncruces/zenity v0.10.15
 )
 
 require (
 	github.com/aethiopicuschan/go-vp9 v0.0.0-20261115145045-c2b2817f7f83 // indirect
+	github.com/akavel/rsrc v0.10.2 // indirect
 	github.com/bitly/go-simplejson v0.5.1 // indirect
+	github.com/dchest/jsmin v1.0.0 // indirect
 	github.com/deploymenttheory/go-sdk-winmediafoundry v0.8.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.12.0 // indirect
 	github.com/dop251/goja v0.0.0-20261103214539-f5d1d0025744 // indirect
@@ -24,6 +27,8 @@ require (
 	github.com/google/pprof v0.0.0-20261103193413-97e8293de3c4 // indirect
 	github.com/hajimehoshi/iro v0.4.0 // indirect
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect
+	github.com/josephspurrier/goversioninfo v1.7.0 // indirect
+	github.com/randall77/makefat v0.0.0-20260406194835-1b91746796b7 // indirect
 	github.com/rcarmo/go-264 v0.0.0-20260913215118-afd03f5c69ed // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/thesyncim/goav v0.0.0-20261021065620-74e15627cd11 // indirect

@@ -30,7 +30,7 @@ import (
 // Set to the current Git tag in release builds with -ldflags.
 var version = "v0.0.0-dev"
 
-//go:embed help/*.txt
+//go:embed help/*.txt manual/*.txt
 var embeddedHelp embed.FS
 
 type root struct {
@@ -40,6 +40,7 @@ type root struct {
 	home                 sidebarMenuItem
 	downloads            sidebarMenuItem
 	dvdWriting           sidebarMenuItem
+	manualMenu           sidebarMenuItem
 	nav                  sidebarMenuItem
 	divider              basicwidget.Divider
 	about                basicwidget.Text
@@ -78,7 +79,11 @@ type root struct {
 	list                 basicwidget.List[int]
 	rows                 []licenseRow
 	licenseText          basicwidget.Text
+	manualPanel          basicwidget.Panel
+	manualPageContent    guigui.WidgetWithPadding[*basicwidget.Text]
+	manualContent        string
 	showLicenses         bool
+	showManual           bool
 	showDownloads        bool
 	showDVDWriting       bool
 	dvdVideoFiles        []dvdVideoFile
@@ -511,6 +516,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDownloads = false
 		r.showDVDWriting = false
 		r.showLicenses = false
+		r.showManual = false
 		guigui.RequestRebuild()
 	}
 	r.downloads.label = "ダウンロード"
@@ -528,6 +534,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDownloads = true
 		r.showDVDWriting = false
 		r.showLicenses = false
+		r.showManual = false
 		guigui.RequestRebuild()
 	}
 	r.dvdWriting.label = "書き込み"
@@ -537,6 +544,16 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.refreshDVDVideoFiles()
 		r.showDVDWriting = true
 		r.showDownloads = false
+		r.showLicenses = false
+		r.showManual = false
+		guigui.RequestRebuild()
+	}
+	r.manualMenu.label = "取扱説明書"
+	r.manualMenu.enabled = true
+	r.manualMenu.activate = func() {
+		r.showManual = true
+		r.showDownloads = false
+		r.showDVDWriting = false
 		r.showLicenses = false
 		guigui.RequestRebuild()
 	}
@@ -584,6 +601,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showLicenses = true
 		r.showDownloads = false
 		r.showDVDWriting = false
+		r.showManual = false
 		guigui.RequestRebuild()
 	}
 	if r.showLicenses {
@@ -622,6 +640,33 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			}
 		}
 		r.list.SetItems(items)
+	} else if r.showManual {
+		r.title.SetValue("取扱説明書")
+		r.manualPanel.SetStyle(basicwidget.PanelStyleDefault)
+		r.manualPanel.SetContentConstraints(basicwidget.PanelContentConstraintsFixedWidth)
+		r.manualPageContent.SetPadding(guigui.Padding{Start: basicwidget.UnitSize(context) / 2, Top: basicwidget.UnitSize(context) / 2, End: basicwidget.UnitSize(context) / 2, Bottom: basicwidget.UnitSize(context) / 2})
+		r.manualPanel.SetContent(&r.manualPageContent)
+		manualText := r.manualPageContent.Widget()
+		manualText.SetValue(r.manualContent)
+		manualText.SetMultiline(true)
+		manualText.SetWrapMode(basicwidget.WrapModeNormal)
+		manualText.SetSelectable(true)
+		manualText.SetFontSize(float64(basicwidget.UnitSize(context)) * 0.62)
+		manualText.SetLineHeight(float64(basicwidget.UnitSize(context)) * 0.78)
+		var manualStyle basicwidget.TextStyles
+		for _, heading := range []string{
+			"はじめに",
+			"1. 動画を保存する",
+			"2. DVDにまとめる動画を選ぶ",
+			"3. DVDに書き込む、またはISOファイルとして保存する",
+			"4. 困ったときは",
+		} {
+			if start := strings.Index(r.manualContent, heading); start >= 0 {
+				manualStyle.SetWeightInRange(start, start+len(heading), 600)
+				manualStyle.SetColorInRange(start, start+len(heading), color.RGBA{R: 55, G: 90, B: 145, A: 255})
+			}
+		}
+		manualText.SetOverrideStyles(&manualStyle, false)
 	} else if r.showDownloads {
 		r.title.SetValue("ダウンロード")
 		r.urlLabel.SetValue("YouTube動画URL")
@@ -946,6 +991,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.home)
 	adder.AddWidget(&r.downloads)
 	adder.AddWidget(&r.dvdWriting)
+	adder.AddWidget(&r.manualMenu)
 	adder.AddWidget(&r.nav)
 	adder.AddWidget(&r.divider)
 	adder.AddWidget(&r.about)
@@ -953,6 +999,8 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.title)
 	if r.showLicenses {
 		adder.AddWidget(&r.list)
+	} else if r.showManual {
+		adder.AddWidget(&r.manualPanel)
 	} else if r.showDownloads {
 		if r.body.Value() != "" {
 			adder.AddWidget(&r.body)
@@ -1001,7 +1049,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	} else {
 		if r.showDownloads {
 			adder.AddWidget(&r.body)
-		} else {
+		} else if !r.showManual {
 			adder.AddWidget(&r.internetCard)
 			adder.AddWidget(&r.driveCard)
 			adder.AddWidget(&r.environmentDivider)
@@ -1013,8 +1061,8 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	return nil
 }
 
-func (r *root) startDVDExport(menuTitle string) {
-	if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight {
+func (r *root) startDVDExport(menuTitle, outputPath string) {
+	if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight || strings.TrimSpace(outputPath) == "" {
 		return
 	}
 	queue := append([]string(nil), r.dvdWriteQueue...)
@@ -1023,7 +1071,7 @@ func (r *root) startDVDExport(menuTitle string) {
 	r.dvdExportMessage = "動画を確認しています…"
 	r.dvdExportProgress = 0
 	go func() {
-		path, err := exportDVDISO(queue, estimatedBytes, menuTitle, func(update dvdExportProgressUpdate) {
+		path, err := exportDVDISO(queue, estimatedBytes, menuTitle, outputPath, func(update dvdExportProgressUpdate) {
 			select {
 			case r.dvdExportProgresses <- update:
 			default:
@@ -1189,7 +1237,7 @@ func validateYouTubeURL(value string) string {
 
 func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	updated := false
-	if r.showDownloads || r.showDVDWriting || r.showLicenses || len(r.helpPages) < 2 {
+	if r.showDownloads || r.showDVDWriting || r.showLicenses || r.showManual || len(r.helpPages) < 2 {
 		r.helpAutoAdvanceAt = time.Time{}
 	} else {
 		now := time.Now()
@@ -1478,6 +1526,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.downloads, image.Rect(b.Min.X, b.Min.Y+2*u, b.Min.X+sidebarWidth, b.Min.Y+4*u))
 	layouter.LayoutWidget(&r.dvdWriting, image.Rect(b.Min.X, b.Min.Y+4*u, b.Min.X+sidebarWidth, b.Min.Y+6*u))
 	navTop := b.Max.Y - 7*u
+	layouter.LayoutWidget(&r.manualMenu, image.Rect(b.Min.X, navTop-2*u, b.Min.X+sidebarWidth, navTop))
 	layouter.LayoutWidget(&r.nav, image.Rect(b.Min.X, navTop, b.Min.X+sidebarWidth, navTop+2*u))
 	layouter.LayoutWidget(&r.divider, image.Rect(b.Min.X+u, navTop+2*u, b.Min.X+sidebarWidth-u, navTop+3*u))
 	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+7*u))
@@ -1485,6 +1534,8 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.title, image.Rect(content.Min.X, content.Min.Y, content.Max.X, content.Min.Y+u))
 	if r.showLicenses {
 		layouter.LayoutWidget(&r.list, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Max.Y))
+	} else if r.showManual {
+		layouter.LayoutWidget(&r.manualPanel, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Max.Y))
 	} else if r.showDVDWriting {
 		queueTop := content.Min.Y + content.Dy()*11/20
 		layouter.LayoutWidget(&r.dvdVideoHeading, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
@@ -1590,6 +1641,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	manualContent, err := fs.ReadFile(embeddedHelp, "manual/ja.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
 	packages := repo.List()
 	full := make([]licenses.Package, 0, len(packages))
 	byName := make(map[string]int, len(packages))
@@ -1611,6 +1666,7 @@ func main() {
 	app := &root{
 		packages:             full,
 		helpPages:            helpPages,
+		manualContent:        strings.TrimSpace(string(manualContent)),
 		rows:                 make([]licenseRow, len(full)),
 		selected:             -1,
 		checks:               checkResults,
