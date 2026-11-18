@@ -528,7 +528,10 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 	if progress != nil {
 		encoder.report("ISOイメージを書き出しています…", encoder.currentConvertedBytes(""))
 	}
-	if err := video2dvd.WriteDVDISO(ctx, filepath.Join(discPath, "VIDEO_TS"), stagedISO); err != nil {
+	imageOptions := video2dvd.DVDImageOptions{
+		VolumeID: dvdISOVolumeID(menuTitle),
+	}
+	if err := video2dvd.WriteDVDISOWithOptions(ctx, filepath.Join(discPath, "VIDEO_TS"), stagedISO, imageOptions); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
@@ -538,6 +541,33 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 		return "", fmt.Errorf("完成したISOファイルを保存できません: %w", err)
 	}
 	return outputPath, nil
+}
+
+func dvdISOVolumeID(title string) string {
+	const maxVolumeIDBytes = 32
+	var volumeID strings.Builder
+	separatorPending := false
+	for _, r := range strings.ToUpper(strings.TrimSpace(title)) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			if separatorPending && volumeID.Len() > 0 {
+				volumeID.WriteByte('_')
+			}
+			separatorPending = false
+			if volumeID.Len() < maxVolumeIDBytes {
+				volumeID.WriteRune(r)
+			}
+			if volumeID.Len() >= maxVolumeIDBytes {
+				break
+			}
+			continue
+		}
+		separatorPending = volumeID.Len() > 0
+	}
+	result := strings.Trim(volumeID.String(), "_")
+	if result == "" {
+		return "YOUTUBE2DVD"
+	}
+	return result
 }
 
 func replaceISOFile(stagedPath, outputPath string) error {
