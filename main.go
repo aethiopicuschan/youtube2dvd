@@ -45,15 +45,14 @@ type root struct {
 	about                basicwidget.Text
 	title                basicwidget.Text
 	body                 basicwidget.Text
-	dvdMenuTitleLabel    basicwidget.Text
-	dvdMenuTitleInput    basicwidget.TextInput
 	dvdVideoHeading      basicwidget.Text
 	dvdVideoList         basicwidget.List[string]
 	dvdQueueHeading      basicwidget.Text
 	dvdQueueEstimate     basicwidget.Text
 	dvdQueueList         basicwidget.List[string]
-	dvdBurnButton        basicwidget.Button
-	dvdExportButton      basicwidget.Button
+	dvdActionButton      basicwidget.Button
+	dvdActionTooltip     basicwidget.TooltipArea
+	dvdWriteDialog       dvdWriteDialog
 	dvdExportProgressBar basicwidget.ProgressBar
 	dvdExportStatus      basicwidget.Text
 	urlLabel             basicwidget.Text
@@ -82,7 +81,6 @@ type root struct {
 	showLicenses         bool
 	showDownloads        bool
 	showDVDWriting       bool
-	dvdMenuTitleInit     bool
 	dvdVideoFiles        []dvdVideoFile
 	selectedDVDVideo     string
 	dvdVideoListMessage  string
@@ -475,7 +473,7 @@ func (r *dvdVideoRow) HandlePointingInput(_ *guigui.Context, bounds *guigui.Widg
 }
 
 func (r *dvdVideoRow) CursorShape(_ *guigui.Context, bounds *guigui.WidgetBounds) (ebiten.CursorShapeType, bool) {
-	if bounds.IsHitAtCursor() {
+	if r.onClick != nil && bounds.IsHitAtCursor() {
 		return ebiten.CursorShapePointer, true
 	}
 	return 0, true
@@ -767,14 +765,6 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.body.SetOverrideStyles(&style, false)
 	} else if r.showDVDWriting {
 		r.title.SetValue("書き込み")
-		if !r.dvdMenuTitleInit {
-			r.dvdMenuTitleInput.SetValue("YouTube to DVD")
-			r.dvdMenuTitleInit = true
-		}
-		r.dvdMenuTitleLabel.SetValue("DVDメニュータイトル")
-		r.dvdMenuTitleLabel.SetSelectable(false)
-		r.dvdMenuTitleLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
-		r.dvdMenuTitleInput.SetPlaceholder("YouTube to DVD")
 		r.dvdVideoHeading.SetValue("ダウンロード済みの動画（ダブルクリックでキューに追加）")
 		r.dvdVideoHeading.SetSelectable(false)
 		r.dvdQueueHeading.SetValue("書き込む動画のキュー")
@@ -842,37 +832,32 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.dvdQueueList.SetStyle(basicwidget.ListStyleNormal)
 		r.dvdQueueList.SetStripeVisible(true)
 		r.dvdQueueList.SetItems(queueItems)
-		r.dvdBurnButton.SetText("書き込む")
-		context.SetEnabled(&r.dvdBurnButton, false)
-		r.dvdExportButton.SetText("書き出す")
-		context.SetEnabled(&r.dvdExportButton, len(r.dvdWriteQueue) > 0 && !r.dvdExportInFlight)
-		r.dvdExportButton.OnDown(func(_ *guigui.Context) {
+		r.dvdActionButton.SetText("")
+		r.dvdActionButton.SetIcon(dvdActionIcon(context))
+		tooltipText := "書き込み方法を選択"
+		if len(r.dvdWriteQueue) == 0 {
+			tooltipText = "書き込みキューに動画を追加してください"
+		} else if r.dvdExportInFlight {
+			tooltipText = "ISOファイルを作成しています"
+		}
+		r.dvdActionTooltip.SetText(tooltipText)
+		context.SetEnabled(&r.dvdActionButton, len(r.dvdWriteQueue) > 0 && !r.dvdExportInFlight)
+		dialogQueue := make([]dvdVideoFile, 0, len(r.dvdWriteQueue))
+		for _, path := range r.dvdWriteQueue {
+			for _, file := range r.dvdVideoFiles {
+				if file.path == path {
+					dialogQueue = append(dialogQueue, file)
+					break
+				}
+			}
+		}
+		r.dvdWriteDialog.SetQueue(dialogQueue, r.dvdQueueEstimateText())
+		r.dvdWriteDialog.onSaveISO = r.startDVDExport
+		r.dvdActionButton.OnDown(func(_ *guigui.Context) {
 			if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight {
 				return
 			}
-			queue := append([]string(nil), r.dvdWriteQueue...)
-			menuTitle := strings.TrimSpace(r.dvdMenuTitleInput.Value())
-			estimatedBytes, _ := dvdISOSizeEstimate(queue, r.dvdVideoFiles)
-			r.dvdExportInFlight = true
-			r.dvdExportMessage = "動画を確認しています…"
-			r.dvdExportProgress = 0
-			go func() {
-				path, err := exportDVDISO(queue, estimatedBytes, menuTitle, func(update dvdExportProgressUpdate) {
-					select {
-					case r.dvdExportProgresses <- update:
-					default:
-						select {
-						case <-r.dvdExportProgresses:
-						default:
-						}
-						select {
-						case r.dvdExportProgresses <- update:
-						default:
-						}
-					}
-				})
-				r.dvdExportResults <- dvdExportResult{path: path, err: err}
-			}()
+			r.dvdWriteDialog.SetOpen(true)
 			guigui.RequestRebuild()
 		})
 		r.dvdExportProgressBar.SetMinimumValue(0)
@@ -964,6 +949,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.nav)
 	adder.AddWidget(&r.divider)
 	adder.AddWidget(&r.about)
+	adder.AddWidget(&r.dvdWriteDialog)
 	adder.AddWidget(&r.title)
 	if r.showLicenses {
 		adder.AddWidget(&r.list)
@@ -999,15 +985,13 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 		adder.AddWidget(&r.urlHint)
 	} else if r.showDVDWriting {
-		adder.AddWidget(&r.dvdMenuTitleLabel)
-		adder.AddWidget(&r.dvdMenuTitleInput)
 		adder.AddWidget(&r.dvdVideoHeading)
 		adder.AddWidget(&r.dvdVideoList)
 		adder.AddWidget(&r.dvdQueueHeading)
 		adder.AddWidget(&r.dvdQueueEstimate)
 		adder.AddWidget(&r.dvdQueueList)
-		adder.AddWidget(&r.dvdBurnButton)
-		adder.AddWidget(&r.dvdExportButton)
+		adder.AddWidget(&r.dvdActionButton)
+		adder.AddWidget(&r.dvdActionTooltip)
 		if r.dvdExportMessage != "" {
 			if r.dvdExportInFlight {
 				adder.AddWidget(&r.dvdExportProgressBar)
@@ -1027,6 +1011,35 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 	}
 	return nil
+}
+
+func (r *root) startDVDExport(menuTitle string) {
+	if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight {
+		return
+	}
+	queue := append([]string(nil), r.dvdWriteQueue...)
+	estimatedBytes, _ := dvdISOSizeEstimate(queue, r.dvdVideoFiles)
+	r.dvdExportInFlight = true
+	r.dvdExportMessage = "動画を確認しています…"
+	r.dvdExportProgress = 0
+	go func() {
+		path, err := exportDVDISO(queue, estimatedBytes, menuTitle, func(update dvdExportProgressUpdate) {
+			select {
+			case r.dvdExportProgresses <- update:
+			default:
+				select {
+				case <-r.dvdExportProgresses:
+				default:
+				}
+				select {
+				case r.dvdExportProgresses <- update:
+				default:
+				}
+			}
+		})
+		r.dvdExportResults <- dvdExportResult{path: path, err: err}
+	}()
+	guigui.RequestRebuild()
 }
 
 func statusColor(status string) color.Color {
@@ -1458,6 +1471,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	b := bounds.Bounds()
 	u := basicwidget.UnitSize(context)
 	layouter.LayoutWidget(&r.background, b)
+	layouter.LayoutWidget(&r.dvdWriteDialog, b)
 	sidebarWidth := 9 * u
 	layouter.LayoutWidget(&r.sidebar, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Max.Y))
 	layouter.LayoutWidget(&r.home, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Min.Y+2*u))
@@ -1473,11 +1487,8 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		layouter.LayoutWidget(&r.list, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Max.Y))
 	} else if r.showDVDWriting {
 		queueTop := content.Min.Y + content.Dy()*11/20
-		menuTitleLabelWidth := min(8*u, content.Dx()/2)
-		layouter.LayoutWidget(&r.dvdMenuTitleLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Min.X+menuTitleLabelWidth, content.Min.Y+2*u))
-		layouter.LayoutWidget(&r.dvdMenuTitleInput, image.Rect(content.Min.X+menuTitleLabelWidth+u/4, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
-		layouter.LayoutWidget(&r.dvdVideoHeading, image.Rect(content.Min.X, content.Min.Y+2*u, content.Max.X, content.Min.Y+3*u))
-		layouter.LayoutWidget(&r.dvdVideoList, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, queueTop))
+		layouter.LayoutWidget(&r.dvdVideoHeading, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
+		layouter.LayoutWidget(&r.dvdVideoList, image.Rect(content.Min.X, content.Min.Y+2*u, content.Max.X, queueTop))
 		queueListTop := queueTop + u
 		estimateWidth := min(15*u, content.Dx()/2)
 		layouter.LayoutWidget(&r.dvdQueueHeading, image.Rect(content.Min.X, queueTop, content.Max.X-estimateWidth, queueTop+u))
@@ -1487,13 +1498,12 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 			statusHeight = 2 * u
 		}
 		queueListBottom := content.Max.Y - statusHeight
-		layouter.LayoutWidget(&r.dvdQueueList, image.Rect(content.Min.X, queueListTop, content.Max.X-5*u, queueListBottom))
-		buttonGap := u / 4
-		buttonGroupHeight := 2*u + buttonGap
-		buttonTop := queueListTop + max(0, (queueListBottom-queueListTop-buttonGroupHeight)/2)
-		buttonBounds := image.Rect(content.Max.X-4*u, buttonTop, content.Max.X, buttonTop+u)
-		layouter.LayoutWidget(&r.dvdBurnButton, buttonBounds)
-		layouter.LayoutWidget(&r.dvdExportButton, buttonBounds.Add(image.Pt(0, u+buttonGap)))
+		buttonWidth := 3 * u / 2
+		buttonLeft := content.Max.X - buttonWidth
+		buttonBounds := image.Rect(buttonLeft, queueListTop+u/4, content.Max.X, queueListTop+u/4+u)
+		layouter.LayoutWidget(&r.dvdQueueList, image.Rect(content.Min.X, queueListTop, buttonLeft-u/4, queueListBottom))
+		layouter.LayoutWidget(&r.dvdActionButton, buttonBounds)
+		layouter.LayoutWidget(&r.dvdActionTooltip, buttonBounds)
 		if r.dvdExportInFlight {
 			progressHeight := u / 2
 			layouter.LayoutWidget(&r.dvdExportProgressBar, image.Rect(content.Min.X, queueListBottom, content.Max.X, queueListBottom+progressHeight))
