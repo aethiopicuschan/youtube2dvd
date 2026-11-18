@@ -17,10 +17,14 @@ type dvdWriteDialog struct {
 	popup   basicwidget.Popup
 	content dvdWriteDialogContent
 
-	queue     []dvdVideoFile
-	estimate  string
-	onSaveISO func(menuTitle, outputPath string)
-	saveError string
+	queue      []dvdVideoFile
+	estimate   string
+	driveState string
+	discState  string
+	busy       bool
+	onSaveISO  func(menuTitle, outputPath string)
+	onBurnDVD  func(menuTitle string)
+	saveError  string
 }
 
 func (d *dvdWriteDialog) SetQueue(queue []dvdVideoFile, estimate string) {
@@ -108,7 +112,7 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	c.menuTitleText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	c.menuTitle.SetPlaceholder("タイトル")
 	hasMenuTitle := strings.TrimSpace(c.menuTitle.Value()) != ""
-	note := "DVDへの書き込みは現在利用できません。"
+	note := dvdWriteReadinessMessage(c.dialog.driveState, c.dialog.discState)
 	if c.dialog.saveError != "" {
 		note = c.dialog.saveError
 	}
@@ -121,8 +125,17 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	}
 	c.burnNote.SetOverrideStyles(&noteStyle, false)
 	c.burnButton.SetText("DVDに書き込む")
-	const directDVDWritingAvailable = false
-	context.SetEnabled(&c.burnButton, hasMenuTitle && directDVDWritingAvailable)
+	backendMessage := dvdBurnBackendMessage()
+	canBurnDVD := hasMenuTitle && len(c.dialog.queue) > 0 && c.dialog.driveState == "検出済み" && c.dialog.discState == dvdMediaWritable && backendMessage == "" && !c.dialog.busy && c.dialog.onBurnDVD != nil
+	context.SetEnabled(&c.burnButton, canBurnDVD)
+	c.burnButton.OnDown(func(_ *guigui.Context) {
+		menuTitle := strings.TrimSpace(c.menuTitle.Value())
+		if menuTitle == "" || len(c.dialog.queue) == 0 || c.dialog.driveState != "検出済み" || c.dialog.discState != dvdMediaWritable || dvdBurnBackendMessage() != "" || c.dialog.busy || c.dialog.onBurnDVD == nil {
+			return
+		}
+		c.dialog.SetOpen(false)
+		c.dialog.onBurnDVD(menuTitle)
+	})
 	c.isoButton.SetText("ISOファイルとして保存する")
 	context.SetEnabled(&c.isoButton, hasMenuTitle && len(c.dialog.queue) > 0 && c.dialog.onSaveISO != nil)
 	c.isoButton.OnDown(func(_ *guigui.Context) {
@@ -154,6 +167,19 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 		c.dialog.SetOpen(false)
 	})
 	return nil
+}
+
+func dvdWriteReadinessMessage(driveState, discState string) string {
+	if driveState != "検出済み" {
+		return "DVDドライブが検出されていません。"
+	}
+	if discState != dvdMediaWritable {
+		return dvdDiscEnvironmentHint(discState)
+	}
+	if message := dvdBurnBackendMessage(); message != "" {
+		return message
+	}
+	return "書き込み可能なDVDです。メニュータイトルを入力して書き込みを開始してください。"
 }
 
 func (c *dvdWriteDialogContent) Measure(context *guigui.Context, _ guigui.Constraints) image.Point {

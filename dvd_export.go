@@ -17,15 +17,19 @@ import (
 )
 
 type dvdExportResult struct {
-	path string
-	err  error
+	path        string
+	err         error
+	burned      bool
+	burnFailure bool
 }
 
 type dvdExportProgressUpdate struct {
-	message        string
-	convertedBytes int64
-	estimatedBytes int64
-	hasProgress    bool
+	message         string
+	convertedBytes  int64
+	estimatedBytes  int64
+	hasProgress     bool
+	progressPercent int
+	hasPercent      bool
 }
 
 type dvdExportProgressReporter func(dvdExportProgressUpdate)

@@ -902,7 +902,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		if len(r.dvdWriteQueue) == 0 {
 			tooltipText = "書き込みキューに動画を追加してください"
 		} else if r.dvdExportInFlight {
-			tooltipText = "ISOファイルを作成しています"
+			tooltipText = "DVD-Videoを作成しています"
 		}
 		r.dvdActionTooltip.SetText(tooltipText)
 		context.SetEnabled(&r.dvdActionButton, len(r.dvdWriteQueue) > 0 && !r.dvdExportInFlight)
@@ -916,7 +916,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			}
 		}
 		r.dvdWriteDialog.SetQueue(dialogQueue, r.dvdQueueEstimateText())
+		r.dvdWriteDialog.driveState = r.driveState
+		r.dvdWriteDialog.discState = r.discState
+		r.dvdWriteDialog.busy = r.dvdExportInFlight
 		r.dvdWriteDialog.onSaveISO = r.startDVDExport
+		r.dvdWriteDialog.onBurnDVD = r.startDVDBurn
 		r.dvdActionButton.OnDown(func(_ *guigui.Context) {
 			if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight {
 				return
@@ -1090,13 +1094,27 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 }
 
 func (r *root) startDVDExport(menuTitle, outputPath string) {
-	if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight || strings.TrimSpace(outputPath) == "" {
+	r.startDVDOperation(menuTitle, outputPath, false)
+}
+
+func (r *root) startDVDBurn(menuTitle string) {
+	r.startDVDOperation(menuTitle, "", true)
+}
+
+func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
+	if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight || (!burn && strings.TrimSpace(outputPath) == "") {
+		return
+	}
+	if burn && r.discState != dvdMediaWritable {
 		return
 	}
 	queue := append([]string(nil), r.dvdWriteQueue...)
 	estimatedBytes, _ := dvdISOSizeEstimate(queue, r.dvdVideoFiles)
 	r.dvdExportInFlight = true
 	r.dvdExportMessage = "動画を確認しています…"
+	if burn {
+		r.dvdExportMessage = "DVDディスクを再確認しています…"
+	}
 	r.dvdExportProgress = 0
 	r.dvdExportETA = ""
 	r.dvdExportConverting = false
@@ -1105,23 +1123,44 @@ func (r *root) startDVDExport(menuTitle, outputPath string) {
 	done := make(chan struct{})
 	r.dvdExportCancel = cancel
 	r.dvdExportDone = done
-	go func() {
-		defer close(done)
-		path, err := exportDVDISO(ctx, queue, estimatedBytes, menuTitle, outputPath, func(update dvdExportProgressUpdate) {
+	progress := func(update dvdExportProgressUpdate) {
+		select {
+		case r.dvdExportProgresses <- update:
+		default:
+			select {
+			case <-r.dvdExportProgresses:
+			default:
+			}
 			select {
 			case r.dvdExportProgresses <- update:
 			default:
-				select {
-				case <-r.dvdExportProgresses:
-				default:
-				}
-				select {
-				case r.dvdExportProgresses <- update:
-				default:
-				}
 			}
-		})
-		r.dvdExportResults <- dvdExportResult{path: path, err: err}
+		}
+	}
+	go func() {
+		defer close(done)
+		if burn && checkDVDMediaStatus() != dvdMediaWritable {
+			r.dvdExportResults <- dvdExportResult{err: fmt.Errorf("DVDディスクが書き込み可能ではありません。ディスクを確認してください"), burnFailure: true}
+			return
+		}
+		if burn {
+			progress(dvdExportProgressUpdate{message: "DVD-Videoを作成しています…"})
+			var err error
+			outputPath, err = os.MkdirTemp("", "youtube2dvd-burn-")
+			if err != nil {
+				r.dvdExportResults <- dvdExportResult{err: fmt.Errorf("書き込み用の一時フォルダーを作成できません: %w", err), burnFailure: true}
+				return
+			}
+			defer os.RemoveAll(outputPath)
+			outputPath = filepath.Join(outputPath, "youtube2dvd.iso")
+		}
+		path, err := exportDVDISO(ctx, queue, estimatedBytes, menuTitle, outputPath, progress)
+		burnFailure := false
+		if err == nil && burn {
+			err = dvdBurnISO(ctx, path, progress)
+			burnFailure = err != nil
+		}
+		r.dvdExportResults <- dvdExportResult{path: path, err: err, burned: burn && err == nil, burnFailure: burnFailure}
 	}()
 	guigui.RequestRebuild()
 }
@@ -1204,7 +1243,10 @@ func environmentNotice(internet, drive, disc string) string {
 	case disc != dvdMediaWritable:
 		return "一部の機能を利用できません。\n" + dvdDiscEnvironmentHint(disc) + "\nYouTube動画をダウンロードし、ISOファイルを作成できます。"
 	default:
-		return "インターネット接続と書き込み可能なDVDディスクを確認しました。\nYouTube動画をダウンロードし、ISOファイルを作成できます。\nDVDへの直接書き込みは現在利用できません。"
+		if message := dvdBurnBackendMessage(); message != "" {
+			return "一部の機能を利用できません。\n" + message + "\nYouTube動画をダウンロードし、ISOファイルを作成できます。"
+		}
+		return "インターネット接続と書き込み可能なDVDディスクを確認しました。\nYouTube動画をダウンロードし、DVDへの書き込みとISOファイルの作成ができます。"
 	}
 }
 
@@ -1471,6 +1513,9 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 							}
 						}
 					}
+					if progress.hasPercent {
+						r.dvdExportProgress = min(99, max(0, progress.progressPercent))
+					}
 					if progress.hasProgress {
 						if r.dvdExportConverting {
 							r.dvdExportETAEstimate.Observe(time.Now(), progress.convertedBytes, progress.estimatedBytes)
@@ -1501,7 +1546,14 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 				r.dvdExportCancel = nil
 			}
 			if result.err != nil {
-				r.dvdExportMessage = dvdExportFailureMessage(result.err)
+				if result.burnFailure {
+					r.dvdExportMessage = dvdBurnFailureMessage(result.err)
+				} else {
+					r.dvdExportMessage = dvdExportFailureMessage(result.err)
+				}
+			} else if result.burned {
+				r.dvdExportMessage = "DVDへの書き込みが完了しました。"
+				r.dvdExportProgress = 100
 			} else {
 				r.dvdExportMessage = "ISOファイルを書き出しました。\n保存先：" + result.path
 				r.dvdExportProgress = 100
