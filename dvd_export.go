@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,24 +30,107 @@ type dvdExportProgressUpdate struct {
 
 type dvdExportProgressReporter func(dvdExportProgressUpdate)
 
-func dvdExportRemainingTimeLabel(startedAt, now time.Time, progress int) string {
-	if startedAt.IsZero() || progress < 5 || progress >= 100 {
+type dvdExportETAEstimator struct {
+	startedAt      time.Time
+	lastProgressAt time.Time
+	smoothedAt     time.Time
+	lastBytes      int64
+	totalBytes     int64
+	bytesPerSecond float64
+	remainingSecs  float64
+}
+
+func (e *dvdExportETAEstimator) Reset() {
+	*e = dvdExportETAEstimator{}
+}
+
+func (e *dvdExportETAEstimator) Observe(now time.Time, convertedBytes, estimatedBytes int64) {
+	if convertedBytes < 0 || estimatedBytes <= 0 {
+		return
+	}
+	if e.startedAt.IsZero() {
+		e.startedAt = now
+		e.lastProgressAt = now
+		e.lastBytes = convertedBytes
+		e.totalBytes = estimatedBytes
+		return
+	}
+	e.totalBytes = estimatedBytes
+	delta := convertedBytes - e.lastBytes
+	if delta <= 0 {
+		if delta < 0 {
+			e.lastBytes = convertedBytes
+			e.lastProgressAt = now
+			e.bytesPerSecond = 0
+			e.remainingSecs = 0
+			e.smoothedAt = time.Time{}
+		}
+		return
+	}
+
+	elapsed := now.Sub(e.lastProgressAt).Seconds()
+	if elapsed < 0.2 {
+		return
+	}
+	observedRate := float64(delta) / elapsed
+	if e.bytesPerSecond == 0 {
+		e.bytesPerSecond = observedRate
+	} else {
+		const rateSmoothingWindow = 10.0
+		alpha := 1 - math.Exp(-math.Min(elapsed, 2)/rateSmoothingWindow)
+		e.bytesPerSecond += alpha * (observedRate - e.bytesPerSecond)
+	}
+	e.lastBytes = convertedBytes
+	e.lastProgressAt = now
+}
+
+func (e *dvdExportETAEstimator) Label(now time.Time) string {
+	if e.startedAt.IsZero() || e.totalBytes <= 0 || e.bytesPerSecond <= 0 || now.Sub(e.startedAt) < 5*time.Second {
 		return ""
 	}
-	elapsed := now.Sub(startedAt)
-	if elapsed < 5*time.Second {
+	if float64(e.lastBytes)/float64(e.totalBytes) < 0.05 {
 		return ""
 	}
-	remaining := time.Duration(float64(elapsed) * float64(100-progress) / float64(progress))
-	if remaining < time.Second {
-		remaining = time.Second
+	if now.Sub(e.lastProgressAt) > 10*time.Second {
+		return dvdExportETASecondsLabel(e.remainingSecs)
 	}
-	remaining = remaining.Round(time.Second)
-	seconds := int(remaining / time.Second)
+	predictedBytes := e.lastBytes + int64(e.bytesPerSecond*now.Sub(e.lastProgressAt).Seconds())
+	if predictedBytes >= e.totalBytes {
+		return "残り時間の目安：まもなく完了"
+	}
+	rawRemaining := float64(e.totalBytes-predictedBytes) / e.bytesPerSecond
+	if e.remainingSecs <= 0 || e.smoothedAt.IsZero() {
+		e.remainingSecs = rawRemaining
+	} else {
+		elapsed := now.Sub(e.smoothedAt).Seconds()
+		const etaSmoothingWindow = 6.0
+		alpha := 1 - math.Exp(-elapsed/etaSmoothingWindow)
+		e.remainingSecs += alpha * (rawRemaining - e.remainingSecs)
+	}
+	e.smoothedAt = now
+	return dvdExportETASecondsLabel(e.remainingSecs)
+}
+
+func dvdExportETASecondsLabel(remaining float64) string {
+	if remaining <= 0 {
+		return ""
+	}
+	step := 5.0
+	if remaining >= 3600 {
+		step = 60
+	} else if remaining >= 600 {
+		step = 30
+	} else if remaining >= 60 {
+		step = 10
+	}
+	seconds := int(math.Ceil(remaining/step) * step)
 	if seconds >= 3600 {
 		return fmt.Sprintf("残り時間の目安：約%d時間%d分", seconds/3600, (seconds%3600)/60)
 	}
 	if seconds >= 60 {
+		if seconds%60 == 0 {
+			return fmt.Sprintf("残り時間の目安：約%d分", seconds/60)
+		}
 		return fmt.Sprintf("残り時間の目安：約%d分%d秒", seconds/60, seconds%60)
 	}
 	return fmt.Sprintf("残り時間の目安：約%d秒", seconds)
@@ -320,13 +404,19 @@ func dvdExportFailureMessage(err error) string {
 	return "ISOファイルの作成に失敗しました。\n原因：" + message
 }
 
-func exportDVDISO(queue []string, estimatedBytes int64, menuTitle, outputPath string, progress dvdExportProgressReporter) (finalPath string, exportErr error) {
+func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, menuTitle, outputPath string, progress dvdExportProgressReporter) (finalPath string, exportErr error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			finalPath = ""
 			exportErr = fmt.Errorf("DVD/ISO変換中に予期しないエラーが発生しました: %v", recovered)
 		}
 	}()
+	if ctx == nil {
+		return "", fmt.Errorf("DVD/ISO変換のコンテキストがありません")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if len(queue) == 0 {
 		return "", fmt.Errorf("キューに動画がありません")
 	}
@@ -360,6 +450,9 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle, outputPath st
 		return err
 	}
 	for index, path := range queue {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		titleNames = append(titleNames, filepath.Base(path))
 		extension := strings.ToLower(filepath.Ext(path))
 		if extension != ".mp4" && extension != ".webm" {
@@ -387,6 +480,9 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle, outputPath st
 	}
 	if estimatedBytes <= 0 {
 		estimatedBytes = dvdISOSizeEstimateFromInputs(inputs)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	stageDir, err := os.MkdirTemp(filepath.Dir(outputPath), ".youtube2dvd-export-")
@@ -421,14 +517,17 @@ func exportDVDISO(queue []string, estimatedBytes int64, menuTitle, outputPath st
 	if progress != nil {
 		encoder.report("動画を確認しています…", 0)
 	}
-	if err := converter.Convert(context.Background(), inputs, discPath, options); err != nil {
+	if err := converter.Convert(ctx, inputs, discPath, options); err != nil {
 		return "", err
 	}
 	stagedISO := filepath.Join(stageDir, "youtube2dvd.iso")
 	if progress != nil {
 		encoder.report("ISOイメージを書き出しています…", encoder.currentConvertedBytes(""))
 	}
-	if err := video2dvd.WriteDVDISO(context.Background(), filepath.Join(discPath, "VIDEO_TS"), stagedISO); err != nil {
+	if err := video2dvd.WriteDVDISO(ctx, filepath.Join(discPath, "VIDEO_TS"), stagedISO); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if err := replaceISOFile(stagedISO, outputPath); err != nil {

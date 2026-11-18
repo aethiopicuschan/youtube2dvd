@@ -99,7 +99,9 @@ type root struct {
 	dvdExportProgress    int
 	dvdExportETA         string
 	dvdExportConverting  bool
-	dvdExportConvertAt   time.Time
+	dvdExportETAEstimate dvdExportETAEstimator
+	dvdExportCancel      stdcontext.CancelFunc
+	dvdExportDone        chan struct{}
 	lastDVDVideoClick    string
 	lastDVDVideoClickAt  time.Time
 	lastDVDQueueClick    string
@@ -1079,9 +1081,14 @@ func (r *root) startDVDExport(menuTitle, outputPath string) {
 	r.dvdExportProgress = 0
 	r.dvdExportETA = ""
 	r.dvdExportConverting = false
-	r.dvdExportConvertAt = time.Time{}
+	r.dvdExportETAEstimate.Reset()
+	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
+	done := make(chan struct{})
+	r.dvdExportCancel = cancel
+	r.dvdExportDone = done
 	go func() {
-		path, err := exportDVDISO(queue, estimatedBytes, menuTitle, outputPath, func(update dvdExportProgressUpdate) {
+		defer close(done)
+		path, err := exportDVDISO(ctx, queue, estimatedBytes, menuTitle, outputPath, func(update dvdExportProgressUpdate) {
 			select {
 			case r.dvdExportProgresses <- update:
 			default:
@@ -1098,6 +1105,17 @@ func (r *root) startDVDExport(menuTitle, outputPath string) {
 		r.dvdExportResults <- dvdExportResult{path: path, err: err}
 	}()
 	guigui.RequestRebuild()
+}
+
+func (r *root) stopDVDExport() {
+	if r.dvdExportCancel != nil {
+		r.dvdExportCancel()
+		r.dvdExportCancel = nil
+	}
+	if r.dvdExportDone != nil {
+		<-r.dvdExportDone
+		r.dvdExportDone = nil
+	}
 }
 
 func statusColor(status string) color.Color {
@@ -1248,7 +1266,7 @@ func validateYouTubeURL(value string) string {
 func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	updated := false
 	if r.dvdExportInFlight && r.dvdExportConverting {
-		eta := dvdExportRemainingTimeLabel(r.dvdExportConvertAt, time.Now(), r.dvdExportProgress)
+		eta := r.dvdExportETAEstimate.Label(time.Now())
 		if eta != r.dvdExportETA {
 			r.dvdExportETA = eta
 			updated = true
@@ -1403,19 +1421,19 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 					if progress.message != "" {
 						r.dvdExportMessage = progress.message
 						if strings.Contains(progress.message, "を変換しています…") {
-							if r.dvdExportConvertAt.IsZero() {
-								r.dvdExportConvertAt = time.Now()
-							}
 							r.dvdExportConverting = true
 						} else {
 							r.dvdExportConverting = false
 							r.dvdExportETA = ""
 							if strings.Contains(progress.message, "DVD-Videoのメニュー") || strings.Contains(progress.message, "ISOイメージを書き出しています") {
-								r.dvdExportConvertAt = time.Time{}
+								r.dvdExportETAEstimate.Reset()
 							}
 						}
 					}
 					if progress.hasProgress {
+						if r.dvdExportConverting {
+							r.dvdExportETAEstimate.Observe(time.Now(), progress.convertedBytes, progress.estimatedBytes)
+						}
 						if progress.estimatedBytes > 0 {
 							percent := int(float64(progress.convertedBytes) / float64(progress.estimatedBytes) * 100)
 							r.dvdExportProgress = min(99, max(0, percent))
@@ -1435,8 +1453,12 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 		case result := <-r.dvdExportResults:
 			r.dvdExportInFlight = false
 			r.dvdExportConverting = false
-			r.dvdExportConvertAt = time.Time{}
 			r.dvdExportETA = ""
+			r.dvdExportETAEstimate.Reset()
+			if r.dvdExportCancel != nil {
+				r.dvdExportCancel()
+				r.dvdExportCancel = nil
+			}
 			if result.err != nil {
 				r.dvdExportMessage = dvdExportFailureMessage(result.err)
 			} else {
@@ -1715,7 +1737,9 @@ func main() {
 		driveState:           "確認中…",
 	}
 	go monitorEnvironment(checkResults)
-	if err := guigui.Run(app, &guigui.RunOptions{Title: "YouTube to DVD", WindowSize: image.Pt(800, 520), WindowMinSize: image.Pt(600, 400)}); err != nil {
-		log.Fatal(err)
+	runErr := guigui.Run(app, &guigui.RunOptions{Title: "YouTube to DVD", WindowSize: image.Pt(800, 520), WindowMinSize: image.Pt(600, 400)})
+	app.stopDVDExport()
+	if runErr != nil {
+		log.Fatal(runErr)
 	}
 }
