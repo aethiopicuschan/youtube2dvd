@@ -29,6 +29,29 @@ type dvdExportProgressUpdate struct {
 
 type dvdExportProgressReporter func(dvdExportProgressUpdate)
 
+func dvdExportRemainingTimeLabel(startedAt, now time.Time, progress int) string {
+	if startedAt.IsZero() || progress < 5 || progress >= 100 {
+		return ""
+	}
+	elapsed := now.Sub(startedAt)
+	if elapsed < 5*time.Second {
+		return ""
+	}
+	remaining := time.Duration(float64(elapsed) * float64(100-progress) / float64(progress))
+	if remaining < time.Second {
+		remaining = time.Second
+	}
+	remaining = remaining.Round(time.Second)
+	seconds := int(remaining / time.Second)
+	if seconds >= 3600 {
+		return fmt.Sprintf("残り時間の目安：約%d時間%d分", seconds/3600, (seconds%3600)/60)
+	}
+	if seconds >= 60 {
+		return fmt.Sprintf("残り時間の目安：約%d分%d秒", seconds/60, seconds%60)
+	}
+	return fmt.Sprintf("残り時間の目安：約%d秒", seconds)
+}
+
 type dvdExportEncoder struct {
 	encoder        *video2dvd.InProcessEncoder
 	titleNames     []string

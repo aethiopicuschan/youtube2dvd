@@ -97,6 +97,9 @@ type root struct {
 	dvdExportInFlight    bool
 	dvdExportMessage     string
 	dvdExportProgress    int
+	dvdExportETA         string
+	dvdExportConverting  bool
+	dvdExportConvertAt   time.Time
 	lastDVDVideoClick    string
 	lastDVDVideoClickAt  time.Time
 	lastDVDQueueClick    string
@@ -908,7 +911,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.dvdExportProgressBar.SetMinimumValue(0)
 		r.dvdExportProgressBar.SetMaximumValue(100)
 		r.dvdExportProgressBar.SetValue(r.dvdExportProgress)
-		r.dvdExportStatus.SetValue(r.dvdExportMessage)
+		exportStatus := r.dvdExportMessage
+		if r.dvdExportETA != "" {
+			exportStatus += "\n" + r.dvdExportETA
+		}
+		r.dvdExportStatus.SetValue(exportStatus)
 		r.dvdExportStatus.SetWrapMode(basicwidget.WrapModeNormal)
 		r.dvdExportStatus.SetMultiline(true)
 		r.dvdExportStatus.SetSelectable(true)
@@ -916,7 +923,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.dvdExportStatus.SetLineHeight(float64(basicwidget.UnitSize(context)) * 0.75)
 		var exportStatusStyle basicwidget.TextStyles
 		if r.dvdExportInFlight {
-			exportStatusStyle.SetColorInRange(0, len(r.dvdExportMessage), color.RGBA{R: 90, G: 90, B: 90, A: 255})
+			exportStatusStyle.SetColorInRange(0, len(exportStatus), color.RGBA{R: 90, G: 90, B: 90, A: 255})
 		} else if strings.Contains(r.dvdExportMessage, "失敗") {
 			exportStatusStyle.SetColorInRange(0, len(r.dvdExportMessage), color.RGBA{R: 185, G: 45, B: 45, A: 255})
 		} else if r.dvdExportMessage != "" {
@@ -1070,6 +1077,9 @@ func (r *root) startDVDExport(menuTitle, outputPath string) {
 	r.dvdExportInFlight = true
 	r.dvdExportMessage = "動画を確認しています…"
 	r.dvdExportProgress = 0
+	r.dvdExportETA = ""
+	r.dvdExportConverting = false
+	r.dvdExportConvertAt = time.Time{}
 	go func() {
 		path, err := exportDVDISO(queue, estimatedBytes, menuTitle, outputPath, func(update dvdExportProgressUpdate) {
 			select {
@@ -1237,6 +1247,13 @@ func validateYouTubeURL(value string) string {
 
 func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	updated := false
+	if r.dvdExportInFlight && r.dvdExportConverting {
+		eta := dvdExportRemainingTimeLabel(r.dvdExportConvertAt, time.Now(), r.dvdExportProgress)
+		if eta != r.dvdExportETA {
+			r.dvdExportETA = eta
+			updated = true
+		}
+	}
 	if r.showDownloads || r.showDVDWriting || r.showLicenses || r.showManual || len(r.helpPages) < 2 {
 		r.helpAutoAdvanceAt = time.Time{}
 	} else {
@@ -1385,6 +1402,18 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 				if r.dvdExportInFlight {
 					if progress.message != "" {
 						r.dvdExportMessage = progress.message
+						if strings.Contains(progress.message, "を変換しています…") {
+							if r.dvdExportConvertAt.IsZero() {
+								r.dvdExportConvertAt = time.Now()
+							}
+							r.dvdExportConverting = true
+						} else {
+							r.dvdExportConverting = false
+							r.dvdExportETA = ""
+							if strings.Contains(progress.message, "DVD-Videoのメニュー") || strings.Contains(progress.message, "ISOイメージを書き出しています") {
+								r.dvdExportConvertAt = time.Time{}
+							}
+						}
 					}
 					if progress.hasProgress {
 						if progress.estimatedBytes > 0 {
@@ -1405,6 +1434,9 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 		select {
 		case result := <-r.dvdExportResults:
 			r.dvdExportInFlight = false
+			r.dvdExportConverting = false
+			r.dvdExportConvertAt = time.Time{}
+			r.dvdExportETA = ""
 			if result.err != nil {
 				r.dvdExportMessage = dvdExportFailureMessage(result.err)
 			} else {
@@ -1547,6 +1579,9 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		statusHeight := 0
 		if r.dvdExportMessage != "" {
 			statusHeight = 2 * u
+			if r.dvdExportETA != "" {
+				statusHeight = 3 * u
+			}
 		}
 		queueListBottom := content.Max.Y - statusHeight
 		buttonWidth := 3 * u / 2
