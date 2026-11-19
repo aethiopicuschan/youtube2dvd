@@ -1778,6 +1778,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 				r.videoTitle.SetWrapMode(basicwidget.WrapModeNormal)
 				r.videoTitle.SetMultiline(true)
 				r.videoTitle.SetSelectable(false)
+				qualityStatusVisible := r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり")
 				if r.thumbnail.HasImage() {
 					previewTop := content.Min.Y + 7*u/2
 					previewBottom := content.Min.Y + 17*u/2
@@ -1785,17 +1786,32 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					r.videoTitle.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 					layouter.LayoutWidget(&r.videoTitle, image.Rect(content.Min.X+8*u, previewTop, content.Max.X, previewBottom))
 					qualityTop := content.Min.Y + 9*u
-					layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, qualityTop, content.Min.X+2*u, qualityTop+u))
-					layouter.LayoutWidget(&r.qualitySelect, image.Rect(content.Min.X+2*u, qualityTop, content.Min.X+9*u, qualityTop+u))
+					if len(r.qualityOptions) > 0 {
+						layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, qualityTop, content.Min.X+2*u, qualityTop+u))
+						layouter.LayoutWidget(&r.qualitySelect, image.Rect(content.Min.X+2*u, qualityTop, content.Min.X+9*u, qualityTop+u))
+					} else if qualityStatusVisible {
+						layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, qualityTop, content.Max.X, qualityTop+u))
+					}
 					buttonTop = qualityTop
 				} else {
-					layouter.LayoutWidget(&r.videoTitle, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
-					qualityTop := content.Min.Y + 9*u/2
-					layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, qualityTop, content.Min.X+2*u, qualityTop+u))
-					layouter.LayoutWidget(&r.qualitySelect, image.Rect(content.Min.X+2*u, qualityTop, content.Min.X+8*u, qualityTop+u))
+					r.videoTitle.SetVerticalAlign(basicwidget.VerticalAlignTop)
+					titleTop := content.Min.Y + 3*u + u/4
+					titleSize := r.videoTitle.Measure(context, guigui.FixedWidthConstraints(content.Dx()))
+					titleHeight := max(u, titleSize.Y)
+					titleBottom := titleTop + titleHeight
+					layouter.LayoutWidget(&r.videoTitle, image.Rect(content.Min.X, titleTop, content.Max.X, titleBottom))
+					qualityTop := titleBottom + u/2
+					if len(r.qualityOptions) > 0 {
+						layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, qualityTop, content.Min.X+2*u, qualityTop+u))
+						layouter.LayoutWidget(&r.qualitySelect, image.Rect(content.Min.X+2*u, qualityTop, content.Min.X+8*u, qualityTop+u))
+					} else if qualityStatusVisible {
+						layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, qualityTop, content.Max.X, qualityTop+u))
+					}
 					buttonTop = qualityTop
 				}
-				layouter.LayoutWidget(&r.downloadButton, image.Rect(content.Min.X+10*u, buttonTop, content.Min.X+14*u, buttonTop+u))
+				if len(r.qualityOptions) > 0 {
+					layouter.LayoutWidget(&r.downloadButton, image.Rect(content.Min.X+10*u, buttonTop, content.Min.X+14*u, buttonTop+u))
+				}
 			} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
 				layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
 			}
