@@ -64,6 +64,7 @@ type root struct {
 	urlLabel             basicwidget.Text
 	urlInput             basicwidget.TextInput
 	urlHint              basicwidget.Text
+	urlNotice            basicwidget.Text
 	confirmButton        basicwidget.Button
 	urlError             basicwidget.Text
 	urlErrorMessage      string
@@ -614,7 +615,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	r.nav.enabled = !r.dvdExportInFlight
 	const mitLabel = "MIT License"
 	const appLabel = "YouTube To DVD "
-	aboutText := appLabel + version + "\nMIT License\nCopyright (c) 2026 Chan Aethiopicus"
+	aboutText := appLabel + version + "\nMIT License\nCopyright (c) 2026 Chan Aethiopicus\n本ツールはYouTube/Google LLCとは無関係の非公式ツールです。"
 	const authorLabel = "Chan Aethiopicus"
 	appStart := strings.Index(aboutText, appLabel)
 	appEnd := appStart + len(appLabel)
@@ -623,6 +624,8 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	r.about.SetValue(aboutText)
 	r.about.SetWrapMode(basicwidget.WrapModeNormal)
 	r.about.SetMultiline(true)
+	// Slightly tighter than the default so that all lines fit the sidebar.
+	r.about.SetLineHeight(float64(basicwidget.UnitSize(context)) * 2 / 3)
 	r.about.SetHorizontalAlign(basicwidget.HorizontalAlignCenter)
 	r.about.SetVerticalAlign(basicwidget.VerticalAlignTop)
 	r.about.SetHotspotRanges([]basicwidget.TextRange{
@@ -715,6 +718,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		var manualStyle basicwidget.TextStyles
 		for _, heading := range []string{
 			"はじめに",
+			"ご利用にあたって",
 			"1. 動画を保存する",
 			"2. DVDにまとめる動画を選ぶ",
 			"3. DVDに書き込む、またはISOファイルとして保存する",
@@ -743,6 +747,16 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		hintStyle.SetColorInRange(0, len("ヒント："), color.RGBA{R: 55, G: 90, B: 145, A: 255})
 		hintStyle.SetWeightInRange(0, len("ヒント："), 600)
 		r.urlHint.SetOverrideStyles(&hintStyle, false)
+		const urlNotice = "権利を持つ動画、または保存が許可された動画のみを対象にしてください。"
+		r.urlNotice.SetValue(urlNotice)
+		r.urlNotice.SetWrapMode(basicwidget.WrapModeNormal)
+		r.urlNotice.SetMultiline(true)
+		r.urlNotice.SetHorizontalAlign(basicwidget.HorizontalAlignEnd)
+		r.urlNotice.SetVerticalAlign(basicwidget.VerticalAlignBottom)
+		r.urlNotice.SetSelectable(false)
+		var urlNoticeStyle basicwidget.TextStyles
+		urlNoticeStyle.SetColorInRange(0, len(urlNotice), color.RGBA{R: 90, G: 90, B: 90, A: 255})
+		r.urlNotice.SetOverrideStyles(&urlNoticeStyle, false)
 		r.urlInput.OnValueChanged(func(_ *guigui.Context, value string, _ bool) {
 			r.urlErrorMessage = validateYouTubeURL(value)
 			if strings.TrimSpace(value) != r.confirmedVideoURL {
@@ -1081,6 +1095,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			adder.AddWidget(&r.body)
 		}
 		adder.AddWidget(&r.urlLabel)
+		adder.AddWidget(&r.urlNotice)
 		adder.AddWidget(&r.urlInput)
 		adder.AddWidget(&r.confirmButton)
 		if r.urlErrorMessage != "" {
@@ -1716,11 +1731,13 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.home, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Min.Y+2*u))
 	layouter.LayoutWidget(&r.downloads, image.Rect(b.Min.X, b.Min.Y+2*u, b.Min.X+sidebarWidth, b.Min.Y+4*u))
 	layouter.LayoutWidget(&r.dvdWriting, image.Rect(b.Min.X, b.Min.Y+4*u, b.Min.X+sidebarWidth, b.Min.Y+6*u))
-	navTop := b.Max.Y - 7*u
+	// The about text below the navigation wraps to up to eight lines.
+	aboutHeight := 11 * u / 2
+	navTop := b.Max.Y - 3*u - aboutHeight
 	layouter.LayoutWidget(&r.manualMenu, image.Rect(b.Min.X, navTop-2*u, b.Min.X+sidebarWidth, navTop))
 	layouter.LayoutWidget(&r.nav, image.Rect(b.Min.X, navTop, b.Min.X+sidebarWidth, navTop+2*u))
 	layouter.LayoutWidget(&r.divider, image.Rect(b.Min.X+u, navTop+2*u, b.Min.X+sidebarWidth-u, navTop+3*u))
-	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+7*u))
+	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+3*u+aboutHeight))
 	content := image.Rect(b.Min.X+sidebarWidth+u, b.Min.Y+u, b.Max.X-u, b.Max.Y-u)
 	layouter.LayoutWidget(&r.title, image.Rect(content.Min.X, content.Min.Y, content.Max.X, content.Min.Y+u))
 	if r.showLicenses {
@@ -1765,7 +1782,10 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		layouter.LayoutWidget(&r.environmentHelp, image.Rect(content.Min.X, helpTop+u/2, content.Max.X, content.Max.Y))
 	} else {
 		if r.showDownloads {
-			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
+			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Min.X+5*u, content.Min.Y+2*u))
+			// The notice sits to the right of the page title and the URL label,
+			// bottom-aligned above the input, with room to wrap in a narrow window.
+			layouter.LayoutWidget(&r.urlNotice, image.Rect(content.Min.X+5*u, content.Min.Y, content.Max.X, content.Min.Y+2*u))
 			layouter.LayoutWidget(&r.urlInput, image.Rect(content.Min.X, content.Min.Y+2*u, content.Max.X-5*u, content.Min.Y+3*u))
 			layouter.LayoutWidget(&r.confirmButton, image.Rect(content.Max.X-4*u, content.Min.Y+2*u, content.Max.X, content.Min.Y+3*u))
 			hintTop := content.Max.Y - 3*u
