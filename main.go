@@ -618,7 +618,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	r.nav.enabled = !r.dvdExportInFlight
 	const mitLabel = "MIT License"
 	const appLabel = "YouTube To DVD "
-	aboutText := appLabel + version + "\nMIT License\nCopyright (c) 2026 Chan Aethiopicus\n本ツールはYouTube/Google LLCとは無関係の非公式ツールです。"
+	aboutText := appLabel + version + "\nMIT License\nCopyright (c) 2026 Chan Aethiopicus"
 	const authorLabel = "Chan Aethiopicus"
 	appStart := strings.Index(aboutText, appLabel)
 	appEnd := appStart + len(appLabel)
@@ -627,8 +627,6 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	r.about.SetValue(aboutText)
 	r.about.SetWrapMode(basicwidget.WrapModeNormal)
 	r.about.SetMultiline(true)
-	// Slightly tighter than the default so that all lines fit the sidebar.
-	r.about.SetLineHeight(float64(basicwidget.UnitSize(context)) * 2 / 3)
 	r.about.SetHorizontalAlign(basicwidget.HorizontalAlignCenter)
 	r.about.SetVerticalAlign(basicwidget.VerticalAlignTop)
 	r.about.SetHotspotRanges([]basicwidget.TextRange{
@@ -1767,13 +1765,11 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.home, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Min.Y+2*u))
 	layouter.LayoutWidget(&r.downloads, image.Rect(b.Min.X, b.Min.Y+2*u, b.Min.X+sidebarWidth, b.Min.Y+4*u))
 	layouter.LayoutWidget(&r.dvdWriting, image.Rect(b.Min.X, b.Min.Y+4*u, b.Min.X+sidebarWidth, b.Min.Y+6*u))
-	// The about text below the navigation wraps to up to eight lines.
-	aboutHeight := 11 * u / 2
-	navTop := b.Max.Y - 3*u - aboutHeight
+	navTop := b.Max.Y - 7*u
 	layouter.LayoutWidget(&r.manualMenu, image.Rect(b.Min.X, navTop-2*u, b.Min.X+sidebarWidth, navTop))
 	layouter.LayoutWidget(&r.nav, image.Rect(b.Min.X, navTop, b.Min.X+sidebarWidth, navTop+2*u))
 	layouter.LayoutWidget(&r.divider, image.Rect(b.Min.X+u, navTop+2*u, b.Min.X+sidebarWidth-u, navTop+3*u))
-	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+3*u+aboutHeight))
+	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+7*u))
 	content := image.Rect(b.Min.X+sidebarWidth+u, b.Min.Y+u, b.Max.X-u, b.Max.Y-u)
 	layouter.LayoutWidget(&r.title, image.Rect(content.Min.X, content.Min.Y, content.Max.X, content.Min.Y+u))
 	if r.showLicenses {

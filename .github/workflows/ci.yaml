@@ -150,7 +150,7 @@ jobs:
   # =========================================================
   fast-security:
     runs-on: ubuntu-slim
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -196,6 +196,13 @@ jobs:
 
       - name: Validate generated licenses
         run: go run ./cmd/validate-licenses internal/licenses/generated/licenses.json
+
+      # Fails when go.mod changed without regenerating the manifest.
+      - name: Check generated licenses are up to date
+        run: |
+          command -v jq >/dev/null || \
+            (sudo apt-get update && sudo apt-get install -y jq)
+          bash scripts/generate-licenses.sh --check
 
       - name: Build
         run: mkdir -p dist && go build -o dist/app .
