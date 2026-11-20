@@ -110,7 +110,7 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	c.menuTitleText.SetValue("DVDメニュータイトル")
 	c.menuTitleText.SetSelectable(false)
 	c.menuTitleText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
-	c.menuTitle.SetPlaceholder("タイトル")
+	c.menuTitle.SetPlaceholder("タイトル（日本語も使えます）")
 	context.SetEnabled(&c.menuTitle, !c.dialog.busy)
 	hasMenuTitle := strings.TrimSpace(c.menuTitle.Value()) != ""
 	note := dvdWriteReadinessMessage(c.dialog.driveState, c.dialog.discState)

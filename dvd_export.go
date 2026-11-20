@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aethiopicuschan/video2dvd"
@@ -194,9 +195,10 @@ func (e *dvdExportEncoder) encode(workDir, inputPath string, encode func() (vide
 	e.mu.Lock()
 	e.count++
 	index := e.count
-	menuTitle := filepath.Base(inputPath)
+	// The converter calls the encoder once per input, in queue order.
+	titleName := dvdMenuVideoName("", index)
 	if index <= len(e.titleNames) {
-		menuTitle = e.titleNames[index-1]
+		titleName = e.titleNames[index-1]
 	}
 	e.mu.Unlock()
 	videoLabel := fmt.Sprintf("動画 %d/%d", index, e.total)
@@ -236,10 +238,9 @@ func (e *dvdExportEncoder) encode(workDir, inputPath string, encode func() (vide
 	title, err := encode()
 	stopMonitor()
 	if err == nil {
-		title.VideoPath, err = addDVDMenuVideoName(workDir, title.VideoPath, menuTitle)
-		if err != nil {
-			return video2dvd.EncodedTitle{}, fmt.Errorf("video2dvd: prepare menu title: %w", err)
-		}
+		// Without a name the converter would label the title after the input
+		// path, which is a temporary "title-NN" link for a video queued twice.
+		title.Name = titleName
 		e.mu.Lock()
 		e.completedBytes += dvdExportGeneratedBytes(workDir)
 		completed := e.completedBytes
@@ -249,42 +250,28 @@ func (e *dvdExportEncoder) encode(workDir, inputPath string, encode func() (vide
 	return title, err
 }
 
-func addDVDMenuVideoName(workDir, encodedVideoPath, inputName string) (string, error) {
-	videoPath := encodedVideoPath
-	if !filepath.IsAbs(videoPath) {
-		videoPath = filepath.Join(workDir, videoPath)
-	}
-
-	name := strings.TrimSuffix(filepath.Base(inputName), filepath.Ext(inputName))
-	var safeName strings.Builder
-	for _, r := range name {
-		if r < 0x20 || strings.ContainsRune(`<>:"/\\|?*`, r) {
-			r = '_'
+// dvdMenuVideoName returns the label of a queued video in the DVD title menu:
+// its file name without the extension. index is the one-based queue position,
+// used when the file name leaves nothing to show.
+func dvdMenuVideoName(path string, index int) string {
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	// The menu draws one "?" for every character it has no glyph for, so drop
+	// the invisible ones and keep the rest as written.
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Variation_Selector, r):
+			return -1
+		case unicode.IsControl(r):
+			return ' '
 		}
-		if safeName.Len()+utf8.RuneLen(r) > 180 {
-			break
-		}
-		safeName.WriteRune(r)
-	}
-	name = strings.Trim(safeName.String(), " .")
+		return r
+	}, name)
+	name = strings.Join(strings.Fields(name), " ")
 	if name == "" {
-		name = "VIDEO"
+		return fmt.Sprintf("動画 %d", index)
 	}
-	upperName := strings.ToUpper(name)
-	switch upperName {
-	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
-		name = "_" + name
-	}
-
-	menuVideoName := name + ".m2v"
-	menuVideoPath := filepath.Join(workDir, menuVideoName)
-	if filepath.Clean(menuVideoPath) == filepath.Clean(videoPath) {
-		return menuVideoName, nil
-	}
-	if err := os.Rename(videoPath, menuVideoPath); err != nil {
-		return "", err
-	}
-	return menuVideoName, nil
+	return name
 }
 
 type dvdExportAuthorer struct {
@@ -317,7 +304,9 @@ func dvdExportGeneratedBytes(workDir string) int64 {
 }
 
 const (
-	dvdISOEstimateBytesPerSecond int64 = 1_300_000 // 8 Mbps video, LPCM audio, and mux overhead.
+	// Upper bound: video2dvd codes video at 7.5 Mbit/s or less, next to
+	// 1.536 Mbit/s LPCM audio and about 3% of pack overhead.
+	dvdISOEstimateBytesPerSecond int64 = 1_170_000
 	dvdISOEstimateBaseOverhead   int64 = 2 << 20
 	dvdISOEstimateTitleOverhead  int64 = 1 << 20
 )
@@ -390,6 +379,15 @@ func dvdExportFailureMessage(err error) string {
 		return "ISOファイルの作成に失敗しました。"
 	}
 
+	switch {
+	case errors.Is(err, video2dvd.ErrDiscCapacity):
+		return "ISOファイルの作成に失敗しました。\n原因：動画の合計がDVD 1枚に収まりません。キューの動画を減らしてください。"
+	case strings.Contains(err.Error(), "mono or stereo only"):
+		return "ISOファイルの作成に失敗しました。\n原因：音声が3チャンネル以上の動画には対応していません（モノラルまたはステレオのみ）。"
+	case strings.Contains(err.Error(), "none are supported by the built-in decoder"):
+		return "ISOファイルの作成に失敗しました。\n原因：対応していない形式の音声が含まれています（MP4はAAC-LC/AC-3、WebMはOpusに対応）。"
+	}
+
 	cause := err
 	for errors.Unwrap(cause) != nil {
 		cause = errors.Unwrap(cause)
@@ -457,7 +455,7 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		titleNames = append(titleNames, filepath.Base(path))
+		titleNames = append(titleNames, dvdMenuVideoName(path, index+1))
 		extension := strings.ToLower(filepath.Ext(path))
 		if extension != ".mp4" && extension != ".webm" {
 			return "", fmt.Errorf("ISO作成に対応している動画形式はMP4とWebMです: %s", filepath.Base(path))
