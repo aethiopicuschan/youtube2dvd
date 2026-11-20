@@ -1,0 +1,30 @@
+{
+  "id": "exampleid01",
+  "title": "テスト動画: サンプル/01",
+  "thumbnail": "https://example.invalid/vi_webp/exampleid01/maxresdefault.webp",
+  "thumbnails": [
+    {"url": "https://example.invalid/vi/exampleid01/default.jpg", "width": 120, "height": 90},
+    {"url": "https://example.invalid/vi/exampleid01/hqdefault.jpg?sqp=abc", "width": 480, "height": 360},
+    {"url": "https://example.invalid/vi_webp/exampleid01/maxresdefault.webp", "width": 1920, "height": 1080},
+    {"url": "https://example.invalid/vi/exampleid01/unknown-size.jpg"}
+  ],
+  "formats": [
+    {"format_id": "sb0", "ext": "mhtml", "protocol": "mhtml", "vcodec": "none", "acodec": "none", "height": 90, "abr": null, "tbr": null, "filesize": null},
+    {"format_id": "249", "ext": "webm", "protocol": "https", "vcodec": "none", "acodec": "opus", "height": null, "abr": 50.1, "tbr": 50.1, "filesize": 100000},
+    {"format_id": "140", "ext": "m4a", "protocol": "https", "vcodec": "none", "acodec": "mp4a.40.2", "height": null, "abr": 129.5, "tbr": 129.5, "filesize": 260000},
+    {"format_id": "251", "ext": "webm", "protocol": "https", "vcodec": "none", "acodec": "opus", "height": null, "abr": 130.2, "tbr": 130.2, "filesize": 300000},
+    {"format_id": "250", "ext": "webm", "protocol": "https", "vcodec": "none", "acodec": "opus", "height": null, "abr": null, "tbr": 70.4, "filesize": 140000},
+    {"format_id": "278", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 144, "abr": null, "tbr": 80.0, "filesize": 500000},
+    {"format_id": "242", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 240, "abr": null, "tbr": 150.0, "filesize": null, "filesize_approx": 900000.5},
+    {"format_id": "134", "ext": "mp4", "protocol": "https", "vcodec": "avc1.4d401e", "acodec": "none", "height": 360, "abr": null, "tbr": 400.0, "filesize": 1500000},
+    {"format_id": "243", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 360, "abr": null, "tbr": 300.0, "filesize": 1200000},
+    {"format_id": "93", "ext": "mp4", "protocol": "m3u8_native", "vcodec": "avc1.4d401e", "acodec": "mp4a.40.2", "height": 360, "abr": null, "tbr": 700.0, "filesize": null},
+    {"format_id": "95", "ext": "mp4", "protocol": "m3u8_native", "vcodec": "avc1.4d401f", "acodec": "mp4a.40.2", "height": 480, "abr": null, "tbr": 1100.0, "filesize": null},
+    {"format_id": "18", "ext": "mp4", "protocol": "https", "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "height": 360, "abr": 96.0, "tbr": 500.0, "filesize": 2000000},
+    {"format_id": "244", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 480, "abr": null, "tbr": 600.0, "filesize": 2400000},
+    {"format_id": "244-drc", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 480, "abr": null, "tbr": 610.0, "filesize": 2450000},
+    {"format_id": "22", "ext": "mp4", "protocol": "https", "vcodec": "avc1.64001F", "acodec": "mp4a.40.2", "height": 720, "abr": 128.0, "tbr": 1500.0, "filesize": 6000000},
+    {"format_id": "247", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 720, "abr": null, "tbr": 1200.0, "filesize": 4800000},
+    {"format_id": "248", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 1080, "abr": null, "tbr": 2400.0, "filesize": 9600000}
+  ]
+}

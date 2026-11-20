@@ -178,6 +178,15 @@ type downloadQuality struct {
 	label     string
 	extension string
 	height    int
+
+	// The rest is set for a quality listed by yt-dlp: the title to save the
+	// video under, the format to download, the separate audio format to
+	// combine with it if any, and their sizes in bytes where known.
+	title            string
+	ytDlpFormat      string
+	ytDlpAudioFormat string
+	videoSize        int64
+	audioSize        int64
 }
 
 type qualityLookupResult struct {
@@ -208,16 +217,7 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 				thumb = candidate
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, thumb.URL, nil)
-		if err == nil {
-			response, requestErr := http.DefaultClient.Do(req)
-			if requestErr == nil {
-				defer response.Body.Close()
-				if response.StatusCode == http.StatusOK {
-					thumbnail, _, _ = image.Decode(response.Body)
-				}
-			}
-		}
+		thumbnail = fetchThumbnail(ctx, thumb.URL)
 	}
 	qualities := make([]downloadQuality, 0, len(video.Formats))
 	seen := make(map[string]bool)
@@ -259,6 +259,25 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 		return video.Title, thumbnail, nil, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
 	}
 	return video.Title, thumbnail, qualities, nil
+}
+
+// fetchThumbnail downloads and decodes a thumbnail. It returns nil when the
+// image cannot be fetched or is in a format the app does not decode.
+func fetchThumbnail(ctx context.Context, url string) image.Image {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil
+	}
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil
+	}
+	thumbnail, _, _ := image.Decode(response.Body)
+	return thumbnail
 }
 
 func downloadDirectory() (string, error) {

@@ -45,6 +45,7 @@ type root struct {
 	home                 sidebarMenuItem
 	downloads            sidebarMenuItem
 	dvdWriting           sidebarMenuItem
+	settingsMenu         sidebarMenuItem
 	manualMenu           sidebarMenuItem
 	nav                  sidebarMenuItem
 	divider              basicwidget.Divider
@@ -65,6 +66,7 @@ type root struct {
 	urlInput             basicwidget.TextInput
 	urlHint              basicwidget.Text
 	urlNotice            basicwidget.Text
+	downloadMethod       basicwidget.Text
 	confirmButton        basicwidget.Button
 	urlError             basicwidget.Text
 	urlErrorMessage      string
@@ -93,6 +95,10 @@ type root struct {
 	manualContent        string
 	showLicenses         bool
 	showManual           bool
+	showSettings         bool
+	settingsPage         settingsPage
+	settings             appSettings
+	settingsPath         string
 	showDownloads        bool
 	showDVDWriting       bool
 	dvdVideoFiles        []dvdVideoFile
@@ -564,6 +570,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDownloads = false
 		r.showDVDWriting = false
 		r.showLicenses = false
+		r.showSettings = false
 		r.showManual = false
 		guigui.RequestRebuild()
 	}
@@ -585,6 +592,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDownloads = true
 		r.showDVDWriting = false
 		r.showLicenses = false
+		r.showSettings = false
 		r.showManual = false
 		guigui.RequestRebuild()
 	}
@@ -599,6 +607,20 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDVDWriting = true
 		r.showDownloads = false
 		r.showLicenses = false
+		r.showSettings = false
+		r.showManual = false
+		guigui.RequestRebuild()
+	}
+	r.settingsMenu.label = "設定"
+	r.settingsMenu.enabled = !r.dvdExportInFlight
+	r.settingsMenu.activate = func() {
+		if r.dvdExportInFlight {
+			return
+		}
+		r.showSettings = true
+		r.showDownloads = false
+		r.showDVDWriting = false
+		r.showLicenses = false
 		r.showManual = false
 		guigui.RequestRebuild()
 	}
@@ -612,6 +634,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDownloads = false
 		r.showDVDWriting = false
 		r.showLicenses = false
+		r.showSettings = false
 		guigui.RequestRebuild()
 	}
 	r.nav.label = "Licenses"
@@ -662,12 +685,25 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			return
 		}
 		r.showLicenses = true
+		r.showSettings = false
 		r.showDownloads = false
 		r.showDVDWriting = false
 		r.showManual = false
 		guigui.RequestRebuild()
 	}
-	if r.showLicenses {
+	if r.showSettings {
+		r.title.SetValue("設定")
+		r.settingsPage.settings = &r.settings
+		r.settingsPage.busy = r.downloadInFlight || r.qualityLoading
+		r.settingsPage.onChange = func() error {
+			// Qualities listed by the other downloader cannot be used.
+			r.clearConfirmedVideo()
+			if r.settingsPath == "" {
+				return nil
+			}
+			return saveSettings(r.settingsPath, r.settings)
+		}
+	} else if r.showLicenses {
 		r.title.SetValue("Third-party licenses")
 		items := make([]basicwidget.ListItem[int], 0, len(r.packages)+1)
 		for i, pkg := range r.packages {
@@ -759,6 +795,17 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		var urlNoticeStyle basicwidget.TextStyles
 		urlNoticeStyle.SetColorInRange(0, len(urlNotice), color.RGBA{R: 90, G: 90, B: 90, A: 255})
 		r.urlNotice.SetOverrideStyles(&urlNoticeStyle, false)
+		downloadMethod := "取得方法：内蔵（最大 360p 程度）"
+		if r.settings.UseYtDlp {
+			downloadMethod = "取得方法：yt-dlp"
+		}
+		r.downloadMethod.SetValue(downloadMethod)
+		r.downloadMethod.SetSelectable(false)
+		r.downloadMethod.SetHorizontalAlign(basicwidget.HorizontalAlignEnd)
+		r.downloadMethod.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+		var downloadMethodStyle basicwidget.TextStyles
+		downloadMethodStyle.SetColorInRange(0, len(downloadMethod), color.RGBA{R: 90, G: 90, B: 90, A: 255})
+		r.downloadMethod.SetOverrideStyles(&downloadMethodStyle, false)
 		r.urlInput.OnValueChanged(func(_ *guigui.Context, value string, _ bool) {
 			r.urlErrorMessage = validateYouTubeURL(value)
 			if strings.TrimSpace(value) != r.confirmedVideoURL {
@@ -843,8 +890,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			r.downloadStatus = "動画をダウンロードしています…"
 			r.downloadedBytes = 0
 			r.totalBytes = 0
+			settings := r.settings
 			go func() {
-				path, err := downloadYouTubeVideo(ctx, videoURL, quality, func(progress downloadProgress) {
+				path, err := downloadVideo(ctx, settings, videoURL, quality, func(progress downloadProgress) {
 					select {
 					case r.downloadProgresses <- progress:
 					default:
@@ -1097,6 +1145,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.home)
 	adder.AddWidget(&r.downloads)
 	adder.AddWidget(&r.dvdWriting)
+	adder.AddWidget(&r.settingsMenu)
 	adder.AddWidget(&r.manualMenu)
 	adder.AddWidget(&r.nav)
 	adder.AddWidget(&r.divider)
@@ -1104,7 +1153,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.dvdWriteDialog)
 	adder.AddWidget(&r.dvdProgressDialog)
 	adder.AddWidget(&r.title)
-	if r.showLicenses {
+	if r.showSettings {
+		adder.AddWidget(&r.settingsPage)
+	} else if r.showLicenses {
 		adder.AddWidget(&r.list)
 	} else if r.showManual {
 		adder.AddWidget(&r.manualPanel)
@@ -1114,6 +1165,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 		adder.AddWidget(&r.urlLabel)
 		adder.AddWidget(&r.urlNotice)
+		adder.AddWidget(&r.downloadMethod)
 		adder.AddWidget(&r.urlInput)
 		adder.AddWidget(&r.confirmButton)
 		if r.urlErrorMessage != "" {
@@ -1445,7 +1497,7 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 			updated = true
 		}
 	}
-	if r.showDownloads || r.showDVDWriting || r.showLicenses || r.showManual || len(r.helpPages) < 2 {
+	if r.showDownloads || r.showDVDWriting || r.showLicenses || r.showManual || r.showSettings || len(r.helpPages) < 2 {
 		r.helpAutoAdvanceAt = time.Time{}
 	} else {
 		now := time.Now()
@@ -1495,10 +1547,16 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 		requestID := r.qualityRequestID
 		videoURL := r.qualityLookupURL
 		r.qualityLookupAt = time.Time{}
-		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 30*time.Second)
+		settings := r.settings
+		timeout := 30 * time.Second
+		if settings.UseYtDlp {
+			// Starting yt-dlp alone can take several seconds.
+			timeout = 90 * time.Second
+		}
+		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), timeout)
 		r.cancelQualityLookup = cancel
 		go func() {
-			title, thumbnail, qualities, err := getYouTubeDetails(ctx, videoURL)
+			title, thumbnail, qualities, err := videoDetails(ctx, settings, videoURL)
 			r.qualityLookupResults <- qualityLookupResult{requestID: requestID, videoURL: videoURL, title: title, thumbnail: thumbnail, qualities: qualities, err: err}
 		}()
 		updated = true
@@ -1767,13 +1825,16 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.downloads, image.Rect(b.Min.X, b.Min.Y+2*u, b.Min.X+sidebarWidth, b.Min.Y+4*u))
 	layouter.LayoutWidget(&r.dvdWriting, image.Rect(b.Min.X, b.Min.Y+4*u, b.Min.X+sidebarWidth, b.Min.Y+6*u))
 	navTop := b.Max.Y - 7*u
+	layouter.LayoutWidget(&r.settingsMenu, image.Rect(b.Min.X, navTop-4*u, b.Min.X+sidebarWidth, navTop-2*u))
 	layouter.LayoutWidget(&r.manualMenu, image.Rect(b.Min.X, navTop-2*u, b.Min.X+sidebarWidth, navTop))
 	layouter.LayoutWidget(&r.nav, image.Rect(b.Min.X, navTop, b.Min.X+sidebarWidth, navTop+2*u))
 	layouter.LayoutWidget(&r.divider, image.Rect(b.Min.X+u, navTop+2*u, b.Min.X+sidebarWidth-u, navTop+3*u))
 	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+7*u))
 	content := image.Rect(b.Min.X+sidebarWidth+u, b.Min.Y+u, b.Max.X-u, b.Max.Y-u)
 	layouter.LayoutWidget(&r.title, image.Rect(content.Min.X, content.Min.Y, content.Max.X, content.Min.Y+u))
-	if r.showLicenses {
+	if r.showSettings {
+		layouter.LayoutWidget(&r.settingsPage, image.Rect(content.Min.X, content.Min.Y+3*u/2, content.Max.X, content.Max.Y))
+	} else if r.showLicenses {
 		layouter.LayoutWidget(&r.list, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Max.Y))
 	} else if r.showManual {
 		layouter.LayoutWidget(&r.manualPanel, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Max.Y))
@@ -1828,6 +1889,8 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	} else {
 		if r.showDownloads {
 			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
+			// The page title only uses the left end of its row.
+			layouter.LayoutWidget(&r.downloadMethod, image.Rect(content.Min.X+6*u, content.Min.Y, content.Max.X, content.Min.Y+u))
 			layouter.LayoutWidget(&r.urlInput, image.Rect(content.Min.X, content.Min.Y+2*u, content.Max.X-5*u, content.Min.Y+3*u))
 			layouter.LayoutWidget(&r.confirmButton, image.Rect(content.Max.X-4*u, content.Min.Y+2*u, content.Max.X, content.Min.Y+3*u))
 			// The notice is a two-line footnote below the hint.
@@ -1936,11 +1999,25 @@ func main() {
 			full = append(full, pkg)
 		}
 	}
+	// The app works without its settings file, so a failure to find or read
+	// it only means starting from the defaults.
+	settingsPath, _ := settingsFilePath()
+	var settings appSettings
+	if settingsPath != "" {
+		settings, _ = loadSettings(settingsPath)
+	}
+	if settings.YtDlpPath == "" {
+		// Only a suggestion for the path field: yt-dlp stays off until the
+		// user turns it on.
+		settings.YtDlpPath = findYtDlp()
+	}
 	checkResults := make(chan environmentCheck, 1)
 	app := &root{
 		packages:             full,
 		helpPages:            helpPages,
 		manualContent:        strings.TrimSpace(string(manualContent)),
+		settings:             settings,
+		settingsPath:         settingsPath,
 		rows:                 make([]licenseRow, len(full)),
 		selected:             -1,
 		checks:               checkResults,
@@ -1955,7 +2032,7 @@ func main() {
 		discState:            dvdMediaChecking,
 	}
 	go monitorEnvironment(checkResults)
-	runErr := guigui.Run(app, &guigui.RunOptions{Title: "YouTube to DVD", WindowSize: image.Pt(800, 520), WindowMinSize: image.Pt(600, 400)})
+	runErr := guigui.Run(app, &guigui.RunOptions{Title: "YouTube to DVD", WindowSize: image.Pt(800, 520), WindowMinSize: image.Pt(600, 420)})
 	app.stopDVDExport()
 	if runErr != nil {
 		log.Fatal(runErr)
