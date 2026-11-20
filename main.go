@@ -82,6 +82,9 @@ type root struct {
 	environmentNotice    basicwidget.Text
 	helpDivider          basicwidget.Divider
 	environmentHelp      basicwidget.Text
+	helpPrevButton       basicwidget.Button
+	helpNextButton       basicwidget.Button
+	helpPageIndicator    basicwidget.Text
 	list                 basicwidget.List[int]
 	rows                 []licenseRow
 	licenseText          basicwidget.Text
@@ -1043,6 +1046,22 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			helpStyle.SetWeightInRange(0, helpTitleEnd, 600)
 		}
 		r.environmentHelp.SetOverrideStyles(&helpStyle, false)
+		r.helpPrevButton.SetText("前へ")
+		r.helpPrevButton.OnDown(func(_ *guigui.Context) {
+			r.turnHelpPage(-1)
+		})
+		r.helpNextButton.SetText("次へ")
+		r.helpNextButton.OnDown(func(_ *guigui.Context) {
+			r.turnHelpPage(1)
+		})
+		indicator := fmt.Sprintf("%d / %d", r.currentHelpPage+1, len(r.helpPages))
+		r.helpPageIndicator.SetValue(indicator)
+		r.helpPageIndicator.SetSelectable(false)
+		r.helpPageIndicator.SetHorizontalAlign(basicwidget.HorizontalAlignCenter)
+		r.helpPageIndicator.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+		var indicatorStyle basicwidget.TextStyles
+		indicatorStyle.SetColorInRange(0, len(indicator), color.RGBA{R: 90, G: 90, B: 90, A: 255})
+		r.helpPageIndicator.SetOverrideStyles(&indicatorStyle, false)
 		var noticeStyle basicwidget.TextStyles
 		noticeText := r.environmentNotice.Value()
 		if r.internetState == "確認中…" || r.driveState == "確認中…" || r.discState == dvdMediaChecking {
@@ -1143,6 +1162,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			adder.AddWidget(&r.environmentNotice)
 			adder.AddWidget(&r.helpDivider)
 			adder.AddWidget(&r.environmentHelp)
+			if len(r.helpPages) > 1 {
+				adder.AddWidget(&r.helpPrevButton)
+				adder.AddWidget(&r.helpPageIndicator)
+				adder.AddWidget(&r.helpNextButton)
+			}
 		}
 	}
 	return nil
@@ -1319,6 +1343,18 @@ func dvdDiscEnvironmentHint(disc string) string {
 	default:
 		return "DVDディスクの書き込み可否を確認できませんでした。ディスクとドライブを確認してください。"
 	}
+}
+
+// turnHelpPage shows the help page delta pages away, wrapping around, and
+// restarts the wait for the automatic advance.
+func (r *root) turnHelpPage(delta int) {
+	count := len(r.helpPages)
+	if count < 2 {
+		return
+	}
+	r.currentHelpPage = ((r.currentHelpPage+delta)%count + count) % count
+	r.helpAutoAdvanceAt = time.Now().Add(helpAutoAdvanceInterval)
+	guigui.RequestRebuild()
 }
 
 func loadHelpPages() ([]string, error) {
@@ -1780,6 +1816,18 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		helpTop := noticeTop + 4*u
 		layouter.LayoutWidget(&r.helpDivider, image.Rect(content.Min.X, helpTop-u/2, content.Max.X, helpTop+u/2))
 		layouter.LayoutWidget(&r.environmentHelp, image.Rect(content.Min.X, helpTop+u/2, content.Max.X, content.Max.Y))
+		if len(r.helpPages) > 1 {
+			// The pager shares the row of the help title, at its right end.
+			pagerTop := helpTop + u/3
+			buttonWidth := 5 * u / 2
+			indicatorWidth := 2 * u
+			nextLeft := content.Max.X - buttonWidth
+			indicatorLeft := nextLeft - indicatorWidth
+			prevLeft := indicatorLeft - buttonWidth
+			layouter.LayoutWidget(&r.helpPrevButton, image.Rect(prevLeft, pagerTop, indicatorLeft, pagerTop+u))
+			layouter.LayoutWidget(&r.helpPageIndicator, image.Rect(indicatorLeft, pagerTop, nextLeft, pagerTop+u))
+			layouter.LayoutWidget(&r.helpNextButton, image.Rect(nextLeft, pagerTop, content.Max.X, pagerTop+u))
+		}
 	} else {
 		if r.showDownloads {
 			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Min.X+5*u, content.Min.Y+2*u))
