@@ -677,7 +677,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			target = "https://github.com/aethiopicuschan"
 		}
 		if target != "" {
-			_ = exec.Command("open", target).Start()
+			openURL(target)
 		}
 	})
 	r.nav.activate = func() {
@@ -733,7 +733,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 				r.licenseText.SetOverrideStylesInRange(&linkStyles, len(label), len(label)+len(pkg.LicenseURL), false)
 				r.licenseText.SetHotspotRanges([]basicwidget.TextRange{{StartInBytes: len(label), EndInBytes: len(label) + len(pkg.LicenseURL)}})
 				r.licenseText.OnHotspotUp(func(_ *guigui.Context, _ basicwidget.TextRange) {
-					_ = exec.Command("open", pkg.LicenseURL).Start()
+					openURL(pkg.LicenseURL)
 				})
 				items = append(items, basicwidget.ListItem[int]{Content: &r.licenseText, Value: -1, IndentLevel: 1, Unselectable: true})
 			}
