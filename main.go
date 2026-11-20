@@ -748,12 +748,13 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		hintStyle.SetColorInRange(0, len("ヒント："), color.RGBA{R: 55, G: 90, B: 145, A: 255})
 		hintStyle.SetWeightInRange(0, len("ヒント："), 600)
 		r.urlHint.SetOverrideStyles(&hintStyle, false)
-		const urlNotice = "権利を持つ動画、または保存が許可された動画のみを対象にしてください。"
+		const urlNotice = "※ この機能の利用はYouTube利用規約に抵触します。権利者の許諾のない動画の保存・配布は著作権侵害となる場合があります。"
 		r.urlNotice.SetValue(urlNotice)
 		r.urlNotice.SetWrapMode(basicwidget.WrapModeNormal)
 		r.urlNotice.SetMultiline(true)
-		r.urlNotice.SetHorizontalAlign(basicwidget.HorizontalAlignEnd)
-		r.urlNotice.SetVerticalAlign(basicwidget.VerticalAlignBottom)
+		r.urlNotice.SetFontSize(float64(basicwidget.UnitSize(context)) * 0.45)
+		r.urlNotice.SetLineHeight(float64(basicwidget.UnitSize(context)) * 0.6)
+		r.urlNotice.SetVerticalAlign(basicwidget.VerticalAlignTop)
 		r.urlNotice.SetSelectable(false)
 		var urlNoticeStyle basicwidget.TextStyles
 		urlNoticeStyle.SetColorInRange(0, len(urlNotice), color.RGBA{R: 90, G: 90, B: 90, A: 255})
@@ -1826,14 +1827,14 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		}
 	} else {
 		if r.showDownloads {
-			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Min.X+5*u, content.Min.Y+2*u))
-			// The notice sits to the right of the page title and the URL label,
-			// bottom-aligned above the input, with room to wrap in a narrow window.
-			layouter.LayoutWidget(&r.urlNotice, image.Rect(content.Min.X+5*u, content.Min.Y, content.Max.X, content.Min.Y+2*u))
+			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
 			layouter.LayoutWidget(&r.urlInput, image.Rect(content.Min.X, content.Min.Y+2*u, content.Max.X-5*u, content.Min.Y+3*u))
 			layouter.LayoutWidget(&r.confirmButton, image.Rect(content.Max.X-4*u, content.Min.Y+2*u, content.Max.X, content.Min.Y+3*u))
-			hintTop := content.Max.Y - 3*u
-			layouter.LayoutWidget(&r.urlHint, image.Rect(content.Min.X, hintTop, content.Max.X, content.Max.Y))
+			// The notice is a two-line footnote below the hint.
+			noticeTop := content.Max.Y - 5*u/4
+			hintTop := noticeTop - 3*u
+			layouter.LayoutWidget(&r.urlHint, image.Rect(content.Min.X, hintTop, content.Max.X, noticeTop))
+			layouter.LayoutWidget(&r.urlNotice, image.Rect(content.Min.X, noticeTop, content.Max.X, content.Max.Y))
 			if r.urlErrorMessage != "" {
 				layouter.LayoutWidget(&r.urlError, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
 			}
