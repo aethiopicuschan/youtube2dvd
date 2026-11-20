@@ -3,7 +3,7 @@ module github.com/aethiopicuschan/youtube2dvd
 go 1.27.4
 
 require (
-	github.com/aethiopicuschan/video2dvd v0.6.0
+	github.com/aethiopicuschan/video2dvd v0.7.0
 	github.com/gravity-zero/mkvgo v0.66.2
 	github.com/guigui-gui/guigui v0.1.0
 	github.com/hajimehoshi/ebiten/v2 v2.10.4
@@ -37,9 +37,9 @@ require (
 	github.com/thesyncim/goh264 v0.0.0-20260714162114-14b36a2bfcc4 // indirect
 	github.com/thesyncim/gopus v0.2.3 // indirect
 	github.com/thesyncim/govpx v0.0.0-20261018202535-159dce5b931a // indirect
-	golang.org/x/image v0.46.0 // indirect
+	golang.org/x/image v0.48.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	howett.net/plist v1.0.1 // indirect
 )
