@@ -4,7 +4,6 @@ go 1.27.4
 
 require (
 	github.com/aethiopicuschan/video2dvd v0.7.0
-	github.com/gravity-zero/mkvgo v0.66.2
 	github.com/guigui-gui/guigui v0.1.0
 	github.com/hajimehoshi/ebiten/v2 v2.10.4
 	github.com/kkdai/youtube/v2 v2.10.8

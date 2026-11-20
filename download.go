@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -20,8 +18,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/gravity-zero/mkvgo/matroska"
-	"github.com/gravity-zero/mkvgo/mkv"
 	"github.com/kkdai/youtube/v2"
 )
 
@@ -39,100 +35,9 @@ func withYouTubeClient(info youtube.ClientInfo, action func() error) error {
 	return action()
 }
 
-func newYouTubeClient(visionOS bool) youtube.Client {
-	if !visionOS {
-		return youtube.Client{}
-	}
-	return youtube.Client{HTTPClient: &http.Client{
-		Transport: visionOSContextTransport{base: http.DefaultTransport},
-	}}
-}
-
-func visionOSYouTubeClientInfo() youtube.ClientInfo {
-	return youtube.ClientInfo{
-		Name:        "VISIONOS",
-		Version:     "1.02",
-		Key:         youtube.EmbeddedClient.Key,
-		DeviceModel: "RealityDevice17,1",
-		UserAgent:   "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
-	}
-}
-
-type visionOSContextTransport struct {
-	base http.RoundTripper
-}
-
-func (t visionOSContextTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if request.Method != http.MethodPost || request.URL.Host != "www.youtube.com" || request.URL.Path != "/youtubei/v1/player" || request.Body == nil {
-		return t.base.RoundTrip(request)
-	}
-
-	body, err := io.ReadAll(request.Body)
-	_ = request.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	var requestContext map[string]json.RawMessage
-	if err := json.Unmarshal(payload["context"], &requestContext); err != nil {
-		return nil, err
-	}
-	var clientContext map[string]json.RawMessage
-	if err := json.Unmarshal(requestContext["client"], &clientContext); err != nil {
-		return nil, err
-	}
-	for key, value := range map[string]string{
-		"clientName":    "VISIONOS",
-		"clientVersion": "1.02",
-		"deviceMake":    "Apple",
-		"deviceModel":   "RealityDevice17,1",
-		"osName":        "visionOS",
-		"osVersion":     "26.5.23O471",
-		"userAgent":     "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
-	} {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, err
-		}
-		clientContext[key] = encoded
-	}
-	encodedClient, err := json.Marshal(clientContext)
-	if err != nil {
-		return nil, err
-	}
-	requestContext["client"] = encodedClient
-	encodedContext, err := json.Marshal(requestContext)
-	if err != nil {
-		return nil, err
-	}
-	payload["context"] = encodedContext
-	encodedBody, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	forwarded := request.Clone(request.Context())
-	forwarded.Body = io.NopCloser(bytes.NewReader(encodedBody))
-	forwarded.ContentLength = int64(len(encodedBody))
-	forwarded.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(encodedBody)), nil
-	}
-	forwarded.Header = request.Header.Clone()
-	forwarded.Header.Del("Content-Length")
-	forwarded.Header.Set("X-YouTube-Client-Name", "101")
-	return t.base.RoundTrip(forwarded)
-}
-
 func downloadYouTubeVideo(ctx context.Context, videoURL string, quality downloadQuality, onProgress func(downloadProgress)) (string, error) {
-	clientInfo := youtube.AndroidClient
-	if quality.visionOSClient {
-		clientInfo = visionOSYouTubeClientInfo()
-	}
 	var outputPath string
-	err := withYouTubeClient(clientInfo, func() error {
+	err := withYouTubeClient(youtube.AndroidClient, func() error {
 		var err error
 		outputPath, err = downloadYouTubeVideoWithCurrentClient(ctx, videoURL, quality, onProgress)
 		return err
@@ -141,7 +46,7 @@ func downloadYouTubeVideo(ctx context.Context, videoURL string, quality download
 }
 
 func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string, quality downloadQuality, onProgress func(downloadProgress)) (string, error) {
-	client := newYouTubeClient(quality.visionOSClient)
+	client := youtube.Client{}
 	video, err := client.GetVideoContext(ctx, videoURL)
 	if err != nil {
 		return "", fmt.Errorf("動画情報を取得できませんでした: %w", err)
@@ -181,38 +86,8 @@ func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string,
 		return "", fmt.Errorf("一時ファイルを閉じられません: %w", err)
 	}
 	defer os.Remove(tmpPath)
-	if quality.audioItag == 0 {
-		if err := downloadFormatToPath(ctx, client, video, format, tmpPath, 0, 0, onProgress); err != nil {
-			return "", err
-		}
-	} else {
-		var audioFormat *youtube.Format
-		for i := range video.Formats {
-			if video.Formats[i].ItagNo == quality.audioItag {
-				audioFormat = &video.Formats[i]
-				break
-			}
-		}
-		if audioFormat == nil {
-			return "", fmt.Errorf("選択した音声形式は現在利用できません。確認し直してください")
-		}
-		totalSize := quality.videoSize + quality.audioSize
-		videoPath, videoSize, err := downloadFormatToTemp(ctx, directory, client, video, format, 0, totalSize, onProgress)
-		if err != nil {
-			return "", err
-		}
-		defer os.Remove(videoPath)
-		audioPath, audioSize, err := downloadFormatToTemp(ctx, directory, client, video, audioFormat, quality.videoSize, totalSize, onProgress)
-		if err != nil {
-			return "", err
-		}
-		defer os.Remove(audioPath)
-		if onProgress != nil {
-			onProgress(downloadProgress{downloaded: videoSize, total: videoSize + audioSize})
-		}
-		if err := muxDownloadedStreams(ctx, videoPath, audioPath, tmpPath, ext, format.MimeType); err != nil {
-			return "", fmt.Errorf("動画と音声を結合できませんでした: %w", err)
-		}
+	if err := downloadFormatToPath(ctx, client, video, format, tmpPath, onProgress); err != nil {
+		return "", err
 	}
 	if err := os.Rename(tmpPath, outputPath); err != nil {
 		return "", fmt.Errorf("保存先へ移動できません: %w", err)
@@ -224,46 +99,9 @@ func downloadableFormats(formats youtube.FormatList) youtube.FormatList {
 	return formats.Type("video/mp4").WithAudioChannels()
 }
 
-func bestAudioFormat(formats youtube.FormatList, mimeType string) *youtube.Format {
-	audio := formats.Type(mimeType)
-	downloadable := make(youtube.FormatList, 0, len(audio))
-	for _, format := range audio {
-		if format.URL != "" || format.Cipher != "" {
-			downloadable = append(downloadable, format)
-		}
-	}
-	if len(downloadable) == 0 {
-		return nil
-	}
-	downloadable.Sort()
-	return &downloadable[0]
-}
-
-func downloadFormatToTemp(ctx context.Context, directory string, client youtube.Client, video *youtube.Video, format *youtube.Format, offset, total int64, onProgress func(downloadProgress)) (string, int64, error) {
-	tmp, err := os.CreateTemp(directory, ".youtube-stream-*.part")
-	if err != nil {
-		return "", 0, fmt.Errorf("一時ストリームファイルを作成できません: %w", err)
-	}
-	path := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", 0, fmt.Errorf("一時ストリームファイルを閉じられません: %w", err)
-	}
-	if err := downloadFormatToPath(ctx, client, video, format, path, offset, total, onProgress); err != nil {
-		_ = os.Remove(path)
-		return "", 0, err
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		_ = os.Remove(path)
-		return "", 0, err
-	}
-	return path, info.Size(), nil
-}
-
-func downloadFormatToPath(ctx context.Context, client youtube.Client, video *youtube.Video, format *youtube.Format, path string, offset, total int64, onProgress func(downloadProgress)) error {
+func downloadFormatToPath(ctx context.Context, client youtube.Client, video *youtube.Video, format *youtube.Format, path string, onProgress func(downloadProgress)) error {
 	for attempt := range 2 {
-		err := downloadFormatAttempt(ctx, client, video, format, path, offset, total, onProgress)
+		err := downloadFormatAttempt(ctx, client, video, format, path, onProgress)
 		if err == nil {
 			return nil
 		}
@@ -282,23 +120,20 @@ func downloadFormatToPath(ctx context.Context, client youtube.Client, video *you
 	return nil
 }
 
-func downloadFormatAttempt(ctx context.Context, client youtube.Client, video *youtube.Video, format *youtube.Format, path string, offset, total int64, onProgress func(downloadProgress)) error {
-	stream, size, err := client.GetStreamContext(ctx, video, format)
+func downloadFormatAttempt(ctx context.Context, client youtube.Client, video *youtube.Video, format *youtube.Format, path string, onProgress func(downloadProgress)) error {
+	stream, total, err := client.GetStreamContext(ctx, video, format)
 	if err != nil {
 		return fmt.Errorf("動画ストリームを取得できませんでした: %w", err)
 	}
 	defer stream.Close()
-	if total == 0 {
-		total = size
-	}
 	if onProgress != nil {
-		onProgress(downloadProgress{downloaded: offset, total: total})
+		onProgress(downloadProgress{total: total})
 	}
 	dst, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("一時動画ファイルを作成できません: %w", err)
 	}
-	progressStream := &downloadProgressWriter{writer: dst, total: total, offset: offset, onProgress: onProgress}
+	progressStream := &downloadProgressWriter{writer: dst, total: total, onProgress: onProgress}
 	_, copyErr := io.Copy(progressStream, stream)
 	closeErr := dst.Close()
 	if copyErr != nil {
@@ -315,46 +150,6 @@ func isYouTubeForbidden(err error) bool {
 	return errors.As(err, &status) && status == youtube.ErrUnexpectedStatusCode(http.StatusForbidden)
 }
 
-func muxDownloadedStreams(ctx context.Context, videoPath, audioPath, outputPath, extension, videoMIME string) error {
-	if extension != ".webm" || !strings.Contains(videoMIME, "video/webm") {
-		return fmt.Errorf("WebM以外のストリームです")
-	}
-	videoMeta, err := matroska.OpenMeta(ctx, videoPath)
-	if err != nil {
-		return fmt.Errorf("WebM映像ストリームを読み取れません: %w", err)
-	}
-	audioMeta, err := matroska.OpenMeta(ctx, audioPath)
-	if err != nil {
-		return fmt.Errorf("WebM音声ストリームを読み取れません: %w", err)
-	}
-	videoID, err := firstTrackID(videoMeta.Tracks, mkv.VideoTrack)
-	if err != nil {
-		return err
-	}
-	audioID, err := firstTrackID(audioMeta.Tracks, mkv.AudioTrack)
-	if err != nil {
-		return err
-	}
-	mkvPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".mux.mkv"
-	defer os.Remove(mkvPath)
-	if err := matroska.Mux(ctx, mkv.MuxOptions{OutputPath: mkvPath, Tracks: []mkv.TrackInput{
-		{SourcePath: videoPath, TrackID: videoID, IsDefault: true},
-		{SourcePath: audioPath, TrackID: audioID, IsDefault: true},
-	}}); err != nil {
-		return err
-	}
-	return matroska.RemuxToWebM(ctx, mkvPath, outputPath)
-}
-
-func firstTrackID(tracks []mkv.Track, trackType mkv.TrackType) (uint64, error) {
-	for _, track := range tracks {
-		if track.Type == trackType {
-			return track.ID, nil
-		}
-	}
-	return 0, fmt.Errorf("結合する%sトラックがありません", trackType)
-}
-
 func downloadExtension(format *youtube.Format) string {
 	if strings.Contains(format.MimeType, "video/webm") {
 		return ".webm"
@@ -366,7 +161,6 @@ type downloadProgressWriter struct {
 	writer     io.Writer
 	written    int64
 	total      int64
-	offset     int64
 	onProgress func(downloadProgress)
 }
 
@@ -374,20 +168,16 @@ func (w *downloadProgressWriter) Write(p []byte) (int, error) {
 	n, err := w.writer.Write(p)
 	w.written += int64(n)
 	if w.onProgress != nil {
-		w.onProgress(downloadProgress{downloaded: w.offset + w.written, total: w.total})
+		w.onProgress(downloadProgress{downloaded: w.written, total: w.total})
 	}
 	return n, err
 }
 
 type downloadQuality struct {
-	itag           int
-	audioItag      int
-	label          string
-	extension      string
-	height         int
-	videoSize      int64
-	audioSize      int64
-	visionOSClient bool
+	itag      int
+	label     string
+	extension string
+	height    int
 }
 
 type qualityLookupResult struct {
@@ -402,7 +192,7 @@ type qualityLookupResult struct {
 func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Image, []downloadQuality, error) {
 	var video *youtube.Video
 	err := withYouTubeClient(youtube.AndroidClient, func() error {
-		client := newYouTubeClient(false)
+		client := youtube.Client{}
 		var err error
 		video, err = client.GetVideoContext(ctx, videoURL)
 		return err
@@ -431,7 +221,7 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 	}
 	qualities := make([]downloadQuality, 0, len(video.Formats))
 	seen := make(map[string]bool)
-	addQuality := func(format youtube.Format, formats youtube.FormatList, audioItag int, visionOSClient bool) {
+	addQuality := func(format youtube.Format) {
 		if format.URL == "" && format.Cipher == "" {
 			return
 		}
@@ -450,48 +240,14 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 		}
 		seen[key] = true
 		qualities = append(qualities, downloadQuality{
-			itag:           format.ItagNo,
-			audioItag:      audioItag,
-			label:          fmt.Sprintf("%s (%s)", label, container),
-			extension:      extension,
-			height:         format.Height,
-			videoSize:      format.ContentLength,
-			visionOSClient: visionOSClient,
+			itag:      format.ItagNo,
+			label:     fmt.Sprintf("%s (%s)", label, container),
+			extension: extension,
+			height:    format.Height,
 		})
-		if audioItag != 0 {
-			for _, audioFormat := range formats {
-				if audioFormat.ItagNo == audioItag {
-					qualities[len(qualities)-1].audioSize = audioFormat.ContentLength
-					break
-				}
-			}
-		}
 	}
 	for _, format := range downloadableFormats(video.Formats) {
-		addQuality(format, video.Formats, 0, false)
-	}
-	// Android often exposes only the 360p MP4 progressive stream. The visionOS
-	// profile also exposes direct WebM URLs for adaptive high-resolution streams.
-	var visionOSVideo *youtube.Video
-	visionOSErr := withYouTubeClient(visionOSYouTubeClientInfo(), func() error {
-		client := newYouTubeClient(true)
-		var err error
-		visionOSVideo, err = client.GetVideoContext(ctx, videoURL)
-		return err
-	})
-	if visionOSErr != nil && ctx.Err() != nil {
-		return video.Title, thumbnail, qualities, ctx.Err()
-	}
-	if visionOSErr == nil && visionOSVideo != nil {
-		visionOSFormats := visionOSVideo.Formats
-		for _, format := range visionOSFormats.Type("video/webm").WithAudioChannels() {
-			addQuality(format, visionOSFormats, 0, true)
-		}
-		if audio := bestAudioFormat(visionOSFormats, "audio/webm"); audio != nil {
-			for _, format := range visionOSFormats.Type("video/webm").AudioChannels(0) {
-				addQuality(format, visionOSFormats, audio.ItagNo, true)
-			}
-		}
+		addQuality(format)
 	}
 	sort.SliceStable(qualities, func(i, j int) bool {
 		if qualities[i].height != qualities[j].height {
@@ -500,7 +256,7 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 		return qualities[i].extension < qualities[j].extension
 	})
 	if len(qualities) == 0 {
-		return video.Title, thumbnail, nil, fmt.Errorf("音声と合わせて取得できる動画形式が見つかりません")
+		return video.Title, thumbnail, nil, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
 	}
 	return video.Title, thumbnail, qualities, nil
 }
