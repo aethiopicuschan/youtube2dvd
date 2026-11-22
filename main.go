@@ -14,9 +14,7 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -151,6 +149,7 @@ type root struct {
 	internetState        string
 	driveState           string
 	discState            string
+	dvdDrives            []dvdDrive
 }
 
 type downloadResult struct {
@@ -380,6 +379,7 @@ type environmentCheck struct {
 	internet string
 	drive    string
 	disc     string
+	drives   []dvdDrive
 }
 
 type sidebarMenuItem struct {
@@ -1028,6 +1028,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.dvdWriteDialog.SetQueue(dialogQueue, r.dvdQueueEstimateText())
 		r.dvdWriteDialog.driveState = r.driveState
 		r.dvdWriteDialog.discState = r.discState
+		r.dvdWriteDialog.drives = r.dvdDrives
 		r.dvdWriteDialog.busy = r.dvdExportInFlight
 		r.dvdWriteDialog.onSaveISO = r.startDVDExport
 		r.dvdWriteDialog.onBurnDVD = r.startDVDBurn
@@ -1063,7 +1064,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.internetCard.status = r.internetState
 		r.internetCard.tone = statusColor(r.internetState)
 		r.driveCard.label = "DVDドライブ"
-		r.driveCard.status = r.driveState
+		r.driveCard.status = dvdDriveStatusLabel(r.driveState, r.dvdDrives)
 		r.driveCard.tone = statusColor(r.driveState)
 		r.driveCard.detail = ""
 		if r.driveState == "検出済み" {
@@ -1071,7 +1072,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 		r.driveCard.detailTone = statusColor(r.discState)
 		r.environmentDivider.SetTintColor(color.RGBA{R: 185, G: 185, B: 185, A: 255})
-		r.environmentNotice.SetValue(environmentNotice(r.internetState, r.driveState, r.discState))
+		r.environmentNotice.SetValue(environmentNotice(r.internetState, r.driveState, r.discState, dvdDrivesHint(r.dvdDrives)))
 		r.environmentNotice.SetMultiline(true)
 		r.environmentNotice.SetWrapMode(basicwidget.WrapModeNormal)
 		if len(r.helpPages) > 0 {
@@ -1225,18 +1226,20 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 }
 
 func (r *root) startDVDExport(menuTitle, outputPath string) {
-	r.startDVDOperation(menuTitle, outputPath, false)
+	r.startDVDOperation(menuTitle, outputPath, false, dvdDrive{})
 }
 
-func (r *root) startDVDBurn(menuTitle string) {
-	r.startDVDOperation(menuTitle, "", true)
+func (r *root) startDVDBurn(menuTitle string, drive dvdDrive) {
+	r.startDVDOperation(menuTitle, "", true, drive)
 }
 
-func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
+// startDVDOperation saves the queue as an ISO file at outputPath or, when
+// burn is set, burns it to drive.
+func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool, drive dvdDrive) {
 	if len(r.dvdWriteQueue) == 0 || r.dvdExportInFlight || (!burn && strings.TrimSpace(outputPath) == "") {
 		return
 	}
-	if burn && r.discState != dvdMediaWritable {
+	if _, writable := findDVDDrive(writableDVDDrives(r.dvdDrives), drive); burn && !writable {
 		return
 	}
 	queue := append([]string(nil), r.dvdWriteQueue...)
@@ -1273,9 +1276,13 @@ func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
 	}
 	go func() {
 		defer close(done)
-		if burn && checkDVDMediaStatus() != dvdMediaWritable {
-			r.dvdExportResults <- dvdExportResult{err: fmt.Errorf("DVDディスクが書き込み可能ではありません。ディスクを確認してください"), burnFailure: true}
-			return
+		if burn {
+			// Check the drive before spending minutes on the conversion.
+			current, found := findDVDDrive(listDVDDrives(), drive)
+			if !found || current.State != dvdMediaWritable {
+				r.dvdExportResults <- dvdExportResult{err: fmt.Errorf("書き込み先のドライブ（%s）のディスクが書き込み可能ではありません。ドライブとディスクを確認してください", drive.Name), burnFailure: true}
+				return
+			}
 		}
 		if burn {
 			progress(dvdExportProgressUpdate{message: "DVD-Videoを作成しています…"})
@@ -1291,7 +1298,7 @@ func (r *root) startDVDOperation(menuTitle, outputPath string, burn bool) {
 		path, err := exportDVDISO(ctx, queue, estimatedBytes, menuTitle, outputPath, progress)
 		burnFailure := false
 		if err == nil && burn {
-			err = dvdBurnISO(ctx, path, progress)
+			err = dvdBurnISO(ctx, path, drive, progress)
 			burnFailure = err != nil
 		}
 		r.dvdExportResults <- dvdExportResult{path: path, err: err, burned: burn && err == nil, burnFailure: burnFailure}
@@ -1355,7 +1362,9 @@ func monitorEnvironment(checkResults chan environmentCheck) {
 	}
 }
 
-func environmentNotice(internet, drive, disc string) string {
+// environmentNotice describes what can be done in the current environment.
+// discHint explains what keeps the drives from burning, if anything does.
+func environmentNotice(internet, drive, disc, discHint string) string {
 	if internet == "確認中…" || drive == "確認中…" || disc == dvdMediaChecking {
 		return "必要な環境を確認しています…"
 	}
@@ -1367,13 +1376,13 @@ func environmentNotice(internet, drive, disc string) string {
 	case !internetAvailable:
 		message := "一部の機能を利用できません。\nインターネット接続がないため、YouTube動画をダウンロードできません。\n手元の動画ファイルからISOファイルを作成できます。"
 		if disc != dvdMediaWritable {
-			message += "\n" + dvdDiscEnvironmentHint(disc)
+			message += "\n" + discHint
 		}
 		return message
 	case !driveAvailable:
 		return "一部の機能を利用できません。\nDVDドライブが未検出のため、ディスクの状態を確認できません。\nYouTube動画のダウンロードとISOファイルの作成はできます。"
 	case disc != dvdMediaWritable:
-		return "一部の機能を利用できません。\n" + dvdDiscEnvironmentHint(disc) + "\nYouTube動画をダウンロードし、ISOファイルを作成できます。"
+		return "一部の機能を利用できません。\n" + discHint + "\nYouTube動画をダウンロードし、ISOファイルを作成できます。"
 	default:
 		if message := dvdBurnBackendMessage(); message != "" {
 			return "一部の機能を利用できません。\n" + message + "\nYouTube動画をダウンロードし、ISOファイルを作成できます。"
@@ -1392,6 +1401,8 @@ func dvdDiscEnvironmentHint(disc string) string {
 		return "ディスクは挿入されていますが、書き込み可否を確認できませんでした。ディスクとドライブを確認してください。"
 	case dvdMediaDriveAbsent:
 		return "DVDドライブが未検出のため、ディスクの状態を確認できません。"
+	case dvdMediaDriveCannotWrite:
+		return "接続されているドライブはDVDの書き込みに対応していないため、DVDへの書き込みはできません。書き込み対応のドライブを接続してください。"
 	default:
 		return "DVDディスクの書き込み可否を確認できませんでした。ディスクとドライブを確認してください。"
 	}
@@ -1525,6 +1536,7 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 			r.internetState = result.internet
 			r.driveState = result.drive
 			r.discState = result.disc
+			r.dvdDrives = result.drives
 			if result.internet != "接続あり" && r.qualityLoading {
 				if r.cancelQualityLookup != nil {
 					r.cancelQualityLookup()
@@ -1778,16 +1790,14 @@ func (r *root) clearConfirmedVideo() {
 }
 
 func checkEnvironment() environmentCheck {
-	result := environmentCheck{internet: "未接続", drive: "未検出", disc: dvdMediaDriveAbsent}
+	result := environmentCheck{internet: "未接続"}
 	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).Dial("tcp", "youtube.com:443")
 	if err == nil {
 		_ = conn.Close()
 		result.internet = "接続あり"
 	}
-	if hasDVDDrive() {
-		result.drive = "検出済み"
-		result.disc = checkDVDMediaStatus()
-	}
+	result.drives = listDVDDrives()
+	result.drive, result.disc = summarizeDVDDrives(result.drives)
 	return result
 }
 
@@ -1808,30 +1818,6 @@ func discBurningReportHasDVDWriter(report string) bool {
 		}
 	}
 	return false
-}
-
-func hasDVDDrive() bool {
-	switch runtime.GOOS {
-	case "darwin":
-		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 8*time.Second)
-		defer cancel()
-		output, err := exec.CommandContext(ctx, "system_profiler", "SPDiscBurningDataType").CombinedOutput()
-		if err != nil {
-			return false
-		}
-		return discBurningReportHasDVDWriter(string(output))
-	case "linux":
-		return len(linuxOpticalDevices()) > 0
-	case "windows":
-		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 8*time.Second)
-		defer cancel()
-		command := "if (Get-CimInstance Win32_CDROMDrive) { exit 0 } else { exit 1 }"
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
-		hideConsoleWindow(cmd)
-		return cmd.Run() == nil
-	default:
-		return false
-	}
 }
 
 func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {

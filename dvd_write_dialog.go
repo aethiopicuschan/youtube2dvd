@@ -21,10 +21,34 @@ type dvdWriteDialog struct {
 	estimate   string
 	driveState string
 	discState  string
+	drives     []dvdDrive
 	busy       bool
 	onSaveISO  func(menuTitle, outputPath string)
-	onBurnDVD  func(menuTitle string)
+	onBurnDVD  func(menuTitle string, drive dvdDrive)
 	saveError  string
+
+	// selectedDrive is the drive to burn to, among the drives that hold a
+	// writable disc.
+	selectedDrive dvdDrive
+}
+
+// burnTarget returns the drive to burn to. It keeps the user's choice while
+// that drive can still burn, and otherwise takes the first drive that can.
+func (d *dvdWriteDialog) burnTarget() (dvdDrive, bool) {
+	writable := writableDVDDrives(d.drives)
+	if drive, found := findDVDDrive(writable, d.selectedDrive); found {
+		return drive, true
+	}
+	if len(writable) == 0 {
+		return dvdDrive{}, false
+	}
+	d.selectedDrive = writable[0]
+	return writable[0], true
+}
+
+// dvdDriveKey identifies a drive in the drive selector.
+func dvdDriveKey(drive dvdDrive) string {
+	return drive.ID + "\x00" + drive.Name
 }
 
 func (d *dvdWriteDialog) SetQueue(queue []dvdVideoFile, estimate string) {
@@ -64,6 +88,9 @@ type dvdWriteDialogContent struct {
 	estimate      basicwidget.Text
 	menuTitleText basicwidget.Text
 	menuTitle     basicwidget.TextInput
+	driveLabel    basicwidget.Text
+	driveName     basicwidget.Text
+	driveSelect   basicwidget.Select[string]
 	burnNote      basicwidget.Text
 	burnButton    basicwidget.Button
 	isoButton     basicwidget.Button
@@ -78,6 +105,7 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 		&c.estimate,
 		&c.menuTitleText,
 		&c.menuTitle,
+		&c.driveLabel,
 		&c.burnNote,
 		&c.burnButton,
 		&c.isoButton,
@@ -113,7 +141,51 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	c.menuTitle.SetPlaceholder("タイトル（日本語も使えます）")
 	context.SetEnabled(&c.menuTitle, !c.dialog.busy)
 	hasMenuTitle := strings.TrimSpace(c.menuTitle.Value()) != ""
-	note := dvdWriteReadinessMessage(c.dialog.driveState, c.dialog.discState)
+
+	c.driveLabel.SetValue("書き込み先")
+	c.driveLabel.SetSelectable(false)
+	c.driveLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	writableDrives := writableDVDDrives(c.dialog.drives)
+	target, hasTarget := c.dialog.burnTarget()
+	if len(writableDrives) > 1 {
+		items := make([]basicwidget.SelectItem[string], 0, len(writableDrives))
+		for _, drive := range writableDrives {
+			items = append(items, basicwidget.SelectItem[string]{Text: drive.Name, Value: dvdDriveKey(drive)})
+		}
+		c.driveSelect.SetItems(items)
+		c.driveSelect.SelectItemByValue(dvdDriveKey(target))
+		c.driveSelect.OnItemSelected(func(_ *guigui.Context, index int) {
+			item, ok := c.driveSelect.ItemByIndex(index)
+			if !ok {
+				return
+			}
+			for _, drive := range writableDVDDrives(c.dialog.drives) {
+				if dvdDriveKey(drive) == item.Value {
+					c.dialog.selectedDrive = drive
+					guigui.RequestRebuild()
+					return
+				}
+			}
+		})
+		context.SetEnabled(&c.driveSelect, !c.dialog.busy)
+		adder.AddWidget(&c.driveSelect)
+	} else {
+		driveName := "書き込み可能なDVDが入ったドライブがありません"
+		if hasTarget {
+			driveName = target.Name
+		}
+		c.driveName.SetValue(driveName)
+		c.driveName.SetSelectable(false)
+		c.driveName.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+		var driveNameStyle basicwidget.TextStyles
+		if !hasTarget {
+			driveNameStyle.SetColorInRange(0, len(driveName), color.RGBA{R: 120, G: 120, B: 120, A: 255})
+		}
+		c.driveName.SetOverrideStyles(&driveNameStyle, false)
+		adder.AddWidget(&c.driveName)
+	}
+
+	note := dvdWriteReadinessMessage(c.dialog.driveState, c.dialog.discState, dvdDrivesHint(c.dialog.drives), len(writableDrives))
 	if c.dialog.saveError != "" {
 		note = c.dialog.saveError
 	}
@@ -127,15 +199,16 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	c.burnNote.SetOverrideStyles(&noteStyle, false)
 	c.burnButton.SetText("DVDに書き込む")
 	backendMessage := dvdBurnBackendMessage()
-	canBurnDVD := hasMenuTitle && len(c.dialog.queue) > 0 && c.dialog.driveState == "検出済み" && c.dialog.discState == dvdMediaWritable && backendMessage == "" && !c.dialog.busy && c.dialog.onBurnDVD != nil
+	canBurnDVD := hasMenuTitle && len(c.dialog.queue) > 0 && hasTarget && backendMessage == "" && !c.dialog.busy && c.dialog.onBurnDVD != nil
 	context.SetEnabled(&c.burnButton, canBurnDVD)
 	c.burnButton.OnDown(func(_ *guigui.Context) {
 		menuTitle := strings.TrimSpace(c.menuTitle.Value())
-		if menuTitle == "" || len(c.dialog.queue) == 0 || c.dialog.driveState != "検出済み" || c.dialog.discState != dvdMediaWritable || dvdBurnBackendMessage() != "" || c.dialog.busy || c.dialog.onBurnDVD == nil {
+		drive, ok := c.dialog.burnTarget()
+		if menuTitle == "" || len(c.dialog.queue) == 0 || !ok || dvdBurnBackendMessage() != "" || c.dialog.busy || c.dialog.onBurnDVD == nil {
 			return
 		}
 		c.dialog.SetOpen(false)
-		c.dialog.onBurnDVD(menuTitle)
+		c.dialog.onBurnDVD(menuTitle, drive)
 	})
 	c.isoButton.SetText("ISOファイルとして保存する")
 	context.SetEnabled(&c.isoButton, hasMenuTitle && len(c.dialog.queue) > 0 && !c.dialog.busy && c.dialog.onSaveISO != nil)
@@ -174,15 +247,21 @@ func (c *dvdWriteDialogContent) Build(context *guigui.Context, adder *guigui.Chi
 	return nil
 }
 
-func dvdWriteReadinessMessage(driveState, discState string) string {
+// dvdWriteReadinessMessage tells whether the DVD can be burned. discHint
+// explains what keeps the drives from burning, and writableDrives is the
+// number of drives that can.
+func dvdWriteReadinessMessage(driveState, discState, discHint string, writableDrives int) string {
 	if driveState != "検出済み" {
 		return "DVDドライブが検出されていません。"
 	}
 	if discState != dvdMediaWritable {
-		return dvdDiscEnvironmentHint(discState)
+		return discHint
 	}
 	if message := dvdBurnBackendMessage(); message != "" {
 		return message
+	}
+	if writableDrives > 1 {
+		return "書き込み可能なDVDが入ったドライブが複数あります。書き込み先を選んでください。"
 	}
 	return "書き込み可能なDVDです。メニュータイトルを入力して書き込みを開始してください。"
 }
@@ -193,7 +272,7 @@ func (c *dvdWriteDialogContent) Measure(context *guigui.Context, _ guigui.Constr
 	queueHeight := c.queueListHeight(context)
 	// Keep the dialog close to its contents instead of reserving a large,
 	// empty list area for short queues.
-	height := 19*u/2 + queueHeight
+	height := 43*u/4 + queueHeight
 	return image.Pt(min(24*u, app.Dx()-2*u), min(height, app.Dy()-2*u))
 }
 
@@ -218,7 +297,16 @@ func (c *dvdWriteDialogContent) Layout(context *guigui.Context, bounds *guigui.W
 	layouter.LayoutWidget(&c.menuTitleText, image.Rect(x, menuLabelTop, x+width, menuLabelTop+u))
 	inputTop := menuLabelTop + u
 	layouter.LayoutWidget(&c.menuTitle, image.Rect(x, inputTop, x+width, inputTop+u))
-	noteTop := inputTop + u + u/4
+	driveTop := inputTop + u + u/4
+	driveLabelWidth := 4 * u
+	layouter.LayoutWidget(&c.driveLabel, image.Rect(x, driveTop, x+driveLabelWidth, driveTop+u))
+	driveBounds := image.Rect(x+driveLabelWidth, driveTop, x+width, driveTop+u)
+	if len(writableDVDDrives(c.dialog.drives)) > 1 {
+		layouter.LayoutWidget(&c.driveSelect, driveBounds)
+	} else {
+		layouter.LayoutWidget(&c.driveName, driveBounds)
+	}
+	noteTop := driveTop + u + u/4
 	layouter.LayoutWidget(&c.burnNote, image.Rect(x, noteTop, x+width, noteTop+u))
 
 	buttonTop := b.Max.Y - u - u/3

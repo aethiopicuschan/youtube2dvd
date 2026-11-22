@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,29 +19,90 @@ const (
 	dvdMediaReadOnly        = "書き込み不可"
 	dvdMediaInsertedUnknown = "挿入済み・判定不能"
 	dvdMediaUnknown         = "判定不能"
+	// dvdMediaDriveCannotWrite is for a drive that only reads discs, such as
+	// a DVD-ROM drive: no disc in it can be written.
+	dvdMediaDriveCannotWrite = "書き込み非対応ドライブ"
 )
 
-func checkDVDMediaStatus() string {
+// listDVDDrives returns the optical drives connected now and the state of
+// the disc in each. A drive whose state cannot be read is listed with
+// dvdMediaUnknown rather than left out.
+func listDVDDrives() []dvdDrive {
 	switch runtime.GOOS {
 	case "darwin":
-		return checkDVDMediaDarwin()
+		return listDVDDrivesDarwin()
 	case "linux":
-		return checkDVDMediaLinux()
+		return listDVDDrivesLinux()
 	case "windows":
-		return checkDVDMediaWindows()
+		return listDVDDrivesWindows()
 	default:
-		return dvdMediaUnknown
+		return nil
 	}
 }
 
-func checkDVDMediaDarwin() string {
+// listDVDDrivesDarwin asks drutil about one drive after another. drutil
+// lists the drives that can burn some kind of disc; one that cannot burn
+// DVDs is reported as such.
+func listDVDDrivesDarwin() []dvdDrive {
+	var drives []dvdDrive
+	for index := 1; index <= 16; index++ {
+		number := strconv.Itoa(index)
+		status, err := runDrutilQuery(number, "status")
+		if err != nil && status == "" {
+			break
+		}
+		if strings.Contains(status, "Could not find a valid device") {
+			break
+		}
+		drive := dvdDrive{ID: number, Name: drutilDriveName(status), State: parseDrutilDVDMediaStatus(status)}
+		if info, _ := runDrutilQuery(number, "info"); drutilReportsDVDWriteSupport(info) && !discBurningReportHasDVDWriter(info) {
+			drive.State = dvdMediaDriveCannotWrite
+		}
+		if drive.Name == "" {
+			drive.Name = "ドライブ " + number
+		}
+		drives = append(drives, drive)
+	}
+	return drives
+}
+
+func runDrutilQuery(drive, verb string) (string, error) {
 	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 8*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "drutil", "status").CombinedOutput()
-	if err != nil && len(output) == 0 {
-		return dvdMediaUnknown
+	output, err := exec.CommandContext(ctx, "drutil", "-drive", drive, verb).CombinedOutput()
+	return string(output), err
+}
+
+// drutilReportsDVDWriteSupport tells whether a "drutil info" report has the
+// DVD-Write line at all, that is whether it says anything about DVD writing.
+func drutilReportsDVDWriteSupport(info string) bool {
+	for line := range strings.SplitSeq(info, "\n") {
+		key, _, found := strings.Cut(line, ":")
+		if found && strings.EqualFold(strings.TrimSpace(key), "DVD-Write") {
+			return true
+		}
 	}
-	return parseDrutilDVDMediaStatus(string(output))
+	return false
+}
+
+// drutilDriveName reads the vendor and product of the drive from the table
+// at the top of drutil's output:
+//
+//	Vendor   Product           Rev
+//	TSSTcorp DVD+-RW SN-208FB  D100
+func drutilDriveName(output string) string {
+	lines := strings.Split(output, "\n")
+	for index, line := range lines {
+		if index+1 >= len(lines) || !strings.Contains(line, "Vendor") || !strings.Contains(line, "Product") {
+			continue
+		}
+		values := strings.TrimRight(lines[index+1], " \r")
+		if revision := strings.Index(line, "Rev"); revision > 0 && revision < len(values) {
+			values = values[:revision]
+		}
+		return strings.Join(strings.Fields(values), " ")
+	}
+	return ""
 }
 
 func parseDrutilDVDMediaStatus(output string) string {
@@ -105,57 +167,61 @@ func parseDrutilDVDMediaStatus(output string) string {
 	return dvdMediaUnknown
 }
 
-func checkDVDMediaLinux() string {
+func listDVDDrivesLinux() []dvdDrive {
 	devices := linuxOpticalDevices()
-	if len(devices) == 0 {
-		return dvdMediaUnknown
-	}
-	foundDisc := false
-	foundKnownDisc := false
-	foundUnknownDisc := false
-	queryFailed := false
-	queriedDrives := 0
+	drives := make([]dvdDrive, 0, len(devices))
 	for _, device := range devices {
 		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 3*time.Second)
 		output, err := exec.CommandContext(ctx, "udevadm", "info", "--query=property", "--name", device).Output()
 		cancel()
 		if err != nil {
-			queryFailed = true
+			drives = append(drives, dvdDrive{ID: device, Name: device, State: dvdMediaUnknown})
 			continue
 		}
-		properties := parseUdevProperties(string(output))
-		if properties["ID_CDROM"] != "1" {
-			queryFailed = true
-			continue
+		drives = append(drives, linuxDVDDriveFromUdev(device, parseUdevProperties(string(output))))
+	}
+	return drives
+}
+
+// linuxDVDDriveFromUdev reads the state of the drive at device from its udev
+// properties.
+func linuxDVDDriveFromUdev(device string, properties map[string]string) dvdDrive {
+	drive := dvdDrive{ID: device, Name: device}
+	if model := strings.Join(strings.Fields(strings.ReplaceAll(properties["ID_VENDOR"]+" "+properties["ID_MODEL"], "_", " ")), " "); model != "" {
+		drive.Name = device + " " + model
+	}
+	if properties["ID_CDROM"] != "1" {
+		drive.State = dvdMediaUnknown
+		return drive
+	}
+	// A drive that reads DVDs but has no DVD write feature cannot burn, and
+	// it does not even see a blank disc: udev would report no media.
+	if properties["ID_CDROM_DVD"] == "1" && !udevDriveWritesDVD(properties) {
+		drive.State = dvdMediaDriveCannotWrite
+		return drive
+	}
+	if properties["ID_CDROM_MEDIA"] != "1" {
+		drive.State = dvdMediaNoDisc
+		return drive
+	}
+	switch writable, known := udevDVDMediaWritable(properties); {
+	case writable:
+		drive.State = dvdMediaWritable
+	case known:
+		drive.State = dvdMediaReadOnly
+	default:
+		drive.State = dvdMediaInsertedUnknown
+	}
+	return drive
+}
+
+func udevDriveWritesDVD(properties map[string]string) bool {
+	for _, feature := range udevDVDWriteFeatures {
+		if udevDriveSupportsDVDFeature(properties, feature) {
+			return true
 		}
-		queriedDrives++
-		if properties["ID_CDROM_MEDIA"] != "1" {
-			continue
-		}
-		foundDisc = true
-		writable, known := udevDVDMediaWritable(properties)
-		if writable {
-			return dvdMediaWritable
-		}
-		if known {
-			foundKnownDisc = true
-		} else {
-			foundUnknownDisc = true
-		}
 	}
-	if foundDisc && foundUnknownDisc {
-		return dvdMediaInsertedUnknown
-	}
-	if foundKnownDisc && !queryFailed && queriedDrives == len(devices) {
-		return dvdMediaReadOnly
-	}
-	if foundDisc {
-		return dvdMediaInsertedUnknown
-	}
-	if !queryFailed && queriedDrives == len(devices) {
-		return dvdMediaNoDisc
-	}
-	return dvdMediaUnknown
+	return false
 }
 
 func linuxOpticalDevices() []string {
@@ -268,76 +334,99 @@ func udevDriveSupportsDVDFeature(properties map[string]string, feature string) b
 	return feature == "DVD_R" && properties["ID_CDROM_DVD_R_DDR"] == "1"
 }
 
-func checkDVDMediaWindows() string {
-	// Starting PowerShell and the disc recording service can take several
-	// seconds, more so while the drive spins up a disc.
-	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 20*time.Second)
-	defer cancel()
-	// IMAPI is the only reliable source: WMI's MediaLoaded is false for a
-	// blank disc, because it reports whether there is a volume to mount. So
-	// "no disc" is answered only when IMAPI looked and found none, and a
-	// failure of IMAPI gives "unknown", not "no disc".
-	const script = `$ErrorActionPreference = 'Stop'
-$driveCount = 0
-$wmiHasMedia = $false
-$imapiFailed = $false
-$recorderCount = 0
-$hasMedia = $false
-$hasWritable = $false
-try {
-  $cdromDrives = @(Get-CimInstance Win32_CDROMDrive)
-  $driveCount = $cdromDrives.Count
-  foreach ($drive in $cdromDrives) {
-    if ($null -ne $drive.MediaLoaded -and [bool]$drive.MediaLoaded) { $wmiHasMedia = $true }
-  }
-} catch { }
+// windowsDrivesScript lists the drives through IMAPI, one line per drive:
+// "DRIVE", the recorder ID, the name and the state, separated by tabs. A
+// drive that only reads, such as a DVD-ROM drive, is refused as the recorder
+// of a data format; it does not see a blank disc either.
+const windowsDrivesScript = `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+function Report($id, $name, $state) { "DRIVE` + "`" + `t$id` + "`" + `t$name` + "`" + `t$state" }
 try {
   $master = New-Object -ComObject IMAPI2.MsftDiscMaster2
-  foreach ($id in $master) {
+  $ids = @($master)
+} catch {
+  # Without IMAPI, report the drives Windows knows of, without their state.
+  try {
+    foreach ($drive in @(Get-CimInstance Win32_CDROMDrive)) { Report '' ("$($drive.Drive) $($drive.Caption)".Trim()) 'unknown' }
+  } catch { }
+  return
+}
+foreach ($id in $ids) {
+  $name = ''
+  try {
+    $recorder = New-Object -ComObject IMAPI2.MsftDiscRecorder2
+    $recorder.InitializeDiscRecorder($id)
+    $parts = @()
+    $letter = @($recorder.VolumePathNames) | Select-Object -First 1
+    if ($letter) { $parts += $letter.TrimEnd('\') }
+    $parts += $recorder.VendorId.Trim()
+    $parts += $recorder.ProductId.Trim()
+    $name = (@($parts | Where-Object { $_ }) -join ' ')
+    $format = New-Object -ComObject IMAPI2.MsftDiscFormat2Data
+    if (-not [bool]$format.IsRecorderSupported($recorder)) { Report $id $name 'drive-read-only'; continue }
+    $format.Recorder = $recorder
+    $type = 0
     try {
-      $recorder = New-Object -ComObject IMAPI2.MsftDiscRecorder2
-      $recorder.InitializeDiscRecorder($id)
-      $format = New-Object -ComObject IMAPI2.MsftDiscFormat2Data
-      $format.Recorder = $recorder
-      $recorderCount++
-      $mediaType = [int]$format.CurrentPhysicalMediaType
-      if ($mediaType -ne 0) {
-        $hasMedia = $true
-        $isDVD = (($mediaType -ge 4 -and $mediaType -le 11) -or $mediaType -eq 13)
-        if ($isDVD -and $mediaType -ne 4) {
-          $mediaStatus = [int]$format.CurrentMediaStatus
-          $supported = [bool]$format.IsCurrentMediaSupported($recorder)
-          $hasWritableState = (($mediaStatus -band 0x000F) -ne 0)
-          $hasBlockingState = (($mediaStatus -band 0xFC00) -ne 0)
-          if ($supported -and $hasWritableState -and -not $hasBlockingState) { $hasWritable = $true }
-        }
-      }
-    } catch { $imapiFailed = $true }
+      $type = [int]$format.CurrentPhysicalMediaType
+    } catch {
+      # E_IMAPI_RECORDER_MEDIA_NO_MEDIA
+      if ($_.Exception.HResult -ne -1062600190) { throw }
+    }
+    if ($type -eq 0) { Report $id $name 'empty'; continue }
+    $isDVD = (($type -ge 4 -and $type -le 11) -or $type -eq 13)
+    if (-not $isDVD -or $type -eq 4) { Report $id $name 'not-writable'; continue }
+    $status = [int]$format.CurrentMediaStatus
+    $supported = [bool]$format.IsCurrentMediaSupported($recorder)
+    if ($supported -and (($status -band 0x000F) -ne 0) -and (($status -band 0xFC00) -eq 0)) {
+      Report $id $name 'writable'
+    } else {
+      Report $id $name 'not-writable'
+    }
+  } catch {
+    Report $id $name 'unknown'
   }
-} catch { $imapiFailed = $true }
-if ($hasWritable) { 'writable' }
-elseif ($hasMedia) { 'not-writable' }
-elseif ($imapiFailed) { if ($wmiHasMedia) { 'inserted-unknown' } else { 'unknown' } }
-elseif ($recorderCount -gt 0) { 'empty' }
-elseif ($wmiHasMedia) { 'not-writable' }
-elseif ($driveCount -gt 0) { 'empty' }
-else { 'unknown' }`
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+}`
+
+func listDVDDrivesWindows() []dvdDrive {
+	// Starting PowerShell and the disc recording service can take several
+	// seconds, more so while a drive spins up a disc.
+	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", windowsDrivesScript)
 	hideConsoleWindow(cmd)
 	output, err := cmd.Output()
-	if err != nil {
-		return dvdMediaUnknown
+	if err != nil && len(output) == 0 {
+		return nil
 	}
-	switch strings.TrimSpace(string(output)) {
-	case "writable":
-		return dvdMediaWritable
-	case "not-writable":
-		return dvdMediaReadOnly
-	case "inserted-unknown":
-		return dvdMediaInsertedUnknown
-	case "empty":
-		return dvdMediaNoDisc
-	default:
-		return dvdMediaUnknown
+	return parseWindowsDrives(string(output))
+}
+
+// parseWindowsDrives reads the output of windowsDrivesScript.
+func parseWindowsDrives(output string) []dvdDrive {
+	var drives []dvdDrive
+	for line := range strings.SplitSeq(output, "\n") {
+		fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
+		if len(fields) != 4 || fields[0] != "DRIVE" {
+			continue
+		}
+		drive := dvdDrive{ID: fields[1], Name: strings.TrimSpace(fields[2])}
+		switch fields[3] {
+		case "writable":
+			drive.State = dvdMediaWritable
+		case "not-writable":
+			drive.State = dvdMediaReadOnly
+		case "empty":
+			drive.State = dvdMediaNoDisc
+		case "drive-read-only":
+			drive.State = dvdMediaDriveCannotWrite
+		default:
+			drive.State = dvdMediaUnknown
+		}
+		if drive.Name == "" {
+			drive.Name = "ドライブ " + strconv.Itoa(len(drives)+1)
+		}
+		drives = append(drives, drive)
 	}
+	return drives
 }

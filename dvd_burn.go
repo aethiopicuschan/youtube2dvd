@@ -35,15 +35,21 @@ func dvdBurnBackendMessage() string {
 	return ""
 }
 
-func dvdBurnISO(ctx stdcontext.Context, isoPath string, progress dvdExportProgressReporter) error {
+// dvdBurnISO burns the image to the drive the user chose. The drive is
+// looked up again first: it must still be connected and hold a writable disc.
+func dvdBurnISO(ctx stdcontext.Context, isoPath string, target dvdDrive, progress dvdExportProgressReporter) error {
 	if ctx == nil {
 		return fmt.Errorf("DVD書き込みのコンテキストがありません")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if checkDVDMediaStatus() != dvdMediaWritable {
-		return fmt.Errorf("DVDディスクが書き込み可能ではありません。ディスクを確認してください")
+	drive, found := findDVDDrive(listDVDDrives(), target)
+	if !found {
+		return fmt.Errorf("書き込み先のドライブ（%s）が見つかりません。ドライブの接続を確認してください", target.Name)
+	}
+	if drive.State != dvdMediaWritable {
+		return fmt.Errorf("書き込み先のドライブ（%s）のディスクが書き込み可能ではありません。ディスクを確認してください", drive.Name)
 	}
 	info, err := os.Stat(isoPath)
 	if err != nil {
@@ -59,56 +65,14 @@ func dvdBurnISO(ctx stdcontext.Context, isoPath string, progress dvdExportProgre
 
 	switch runtime.GOOS {
 	case "darwin":
-		drive, err := writableMacDVDDrive(ctx)
-		if err != nil {
-			return err
-		}
-		return runDrutil(ctx, []string{"-drive", drive, "burn", "-noverify", isoPath}, progress)
+		return runDrutil(ctx, []string{"-drive", drive.ID, "burn", "-noverify", isoPath}, progress)
 	case "linux":
-		device, err := writableLinuxDVDDevice(ctx)
-		if err != nil {
-			return err
-		}
-		return runDVDWriterCommand(ctx, "growisofs", []string{"-dvd-compat", "-Z", device + "=" + isoPath}, progress)
+		return runDVDWriterCommand(ctx, "growisofs", []string{"-dvd-compat", "-Z", drive.ID + "=" + isoPath}, progress)
 	case "windows":
-		return burnDVDISOWindows(ctx, isoPath, progress)
+		return burnDVDISOWindows(ctx, isoPath, drive.ID, progress)
 	default:
 		return fmt.Errorf("このOSでのDVD書き込みには対応していません")
 	}
-}
-
-func writableMacDVDDrive(ctx stdcontext.Context) (string, error) {
-	for index := 1; index <= 16; index++ {
-		output, err := exec.CommandContext(ctx, "drutil", "-drive", strconv.Itoa(index), "status").CombinedOutput()
-		if err != nil && len(output) == 0 {
-			if index == 1 {
-				return "", fmt.Errorf("DVDドライブの状態を確認できません: %w", err)
-			}
-			break
-		}
-		if parseDrutilDVDMediaStatus(string(output)) == dvdMediaWritable {
-			return strconv.Itoa(index), nil
-		}
-	}
-	return "", fmt.Errorf("書き込み可能なDVDドライブとディスクの組み合わせが見つかりません")
-}
-
-func writableLinuxDVDDevice(ctx stdcontext.Context) (string, error) {
-	devices := linuxOpticalDevices()
-	for _, device := range devices {
-		output, err := exec.CommandContext(ctx, "udevadm", "info", "--query=property", "--name", device).Output()
-		if err != nil {
-			continue
-		}
-		properties := parseUdevProperties(string(output))
-		if properties["ID_CDROM"] != "1" || properties["ID_CDROM_MEDIA"] != "1" {
-			continue
-		}
-		if writable, known := udevDVDMediaWritable(properties); writable && known {
-			return device, nil
-		}
-	}
-	return "", fmt.Errorf("書き込み可能なDVDドライブとディスクの組み合わせが見つかりません")
 }
 
 func windowsScriptHost() (string, error) {
@@ -121,7 +85,7 @@ func windowsScriptHost() (string, error) {
 	return exec.LookPath("cscript.exe")
 }
 
-func burnDVDISOWindows(ctx stdcontext.Context, isoPath string, progress dvdExportProgressReporter) error {
+func burnDVDISOWindows(ctx stdcontext.Context, isoPath, recorderID string, progress dvdExportProgressReporter) error {
 	script, err := os.CreateTemp("", "youtube2dvd-burn-*.vbs")
 	if err != nil {
 		return fmt.Errorf("書き込み用スクリプトを作成できません（Windows）: %w", err)
@@ -139,7 +103,7 @@ func burnDVDISOWindows(ctx stdcontext.Context, isoPath string, progress dvdExpor
 	if err != nil {
 		return fmt.Errorf("スクリプトホストを利用できません（Windows Script Host）: %w", err)
 	}
-	return runDVDWriterCommand(ctx, host, []string{"//NoLogo", scriptPath, isoPath}, progress)
+	return runDVDWriterCommand(ctx, host, []string{"//NoLogo", scriptPath, isoPath, recorderID}, progress)
 }
 
 const windowsDVDBurnScript = `Option Explicit
@@ -161,11 +125,10 @@ Const MEDIA_FINAL_SESSION = 8
 Const MEDIA_BLOCKING_MASK = &HFC00
 Const WRITE_ACTION_WRITING_DATA = 4
 
-Dim master, recorder, writer, imageManager, fileSystem, isoFile, index, mediaType, mediaStatus
-Dim isoPath, isoSize, sectors, freeSectors, supported, writableState
+Dim recorder, writer, imageManager, fileSystem, isoFile, mediaType, mediaStatus
+Dim isoPath, recorderID, isoSize, sectors, freeSectors, supported, writableState
 isoPath = WScript.Arguments(0)
-Set master = CreateObject("IMAPI2.MsftDiscMaster2")
-If Err.Number <> 0 Then Fail "Could not initialize IMAPI2: " & Err.Description
+recorderID = WScript.Arguments(1)
 
 Set fileSystem = CreateObject("Scripting.FileSystemObject")
 Set isoFile = fileSystem.GetFile(isoPath)
@@ -182,36 +145,31 @@ If Err.Number <> 0 Then Fail "Could not read the ISO image: " & Err.Description
 imageManager.Validate
 If Err.Number <> 0 Then Fail "The ISO image is not valid: " & Err.Description
 
-For index = 0 To master.Count - 1
-  Err.Clear
-  Set recorder = CreateObject("IMAPI2.MsftDiscRecorder2")
-  recorder.InitializeDiscRecorder master.Item(index)
-  Set writer = CreateObject("IMAPI2.MsftDiscFormat2Data")
-  writer.Recorder = recorder
-  If Err.Number = 0 Then
-    mediaType = writer.CurrentPhysicalMediaType
-    mediaStatus = writer.CurrentMediaStatus
-    If Err.Number = 0 Then
-      supported = writer.IsCurrentMediaSupported(recorder)
-      writableState = ((mediaStatus And (MEDIA_OVERWRITE_ONLY Or MEDIA_BLANK Or MEDIA_APPENDABLE Or MEDIA_FINAL_SESSION)) <> 0)
-      If supported And writableState And ((mediaStatus And MEDIA_BLOCKING_MASK) = 0) Then
-        If mediaType = DVD_ROM Then Fail "DVD-ROM media cannot be written."
-        If Not ((mediaType >= DVD_RAM And mediaType <= DVD_R_DL) Or mediaType = DVD_PLUS_RW_DL) Then Fail "The inserted media is not a writable DVD."
-        freeSectors = writer.FreeSectorsOnMedia
-        If Err.Number <> 0 Then Fail "Could not check free DVD capacity: " & Err.Description
-        If freeSectors < sectors Then Fail "The ISO file exceeds the free DVD capacity."
-        writer.ClientName = "YouTube to DVD"
-        writer.ForceMediaToBeClosed = True
-        writer.ForceOverwrite = True
-        WScript.ConnectObject writer, "BurnEvent_"
-        writer.Write imageManager.Stream
-        If Err.Number <> 0 Then Fail "IMAPI2 could not write the DVD: " & Err.Description
-        WScript.Quit 0
-      End If
-    End If
-  End If
-Next
-Fail "No writable DVD drive and disc combination was found."
+Set recorder = CreateObject("IMAPI2.MsftDiscRecorder2")
+If Err.Number <> 0 Then Fail "Could not initialize IMAPI2: " & Err.Description
+recorder.InitializeDiscRecorder recorderID
+If Err.Number <> 0 Then Fail "Could not open the DVD drive: " & Err.Description
+Set writer = CreateObject("IMAPI2.MsftDiscFormat2Data")
+writer.Recorder = recorder
+If Err.Number <> 0 Then Fail "The DVD drive cannot write discs: " & Err.Description
+mediaType = writer.CurrentPhysicalMediaType
+mediaStatus = writer.CurrentMediaStatus
+If Err.Number <> 0 Then Fail "Could not check the disc: " & Err.Description
+supported = writer.IsCurrentMediaSupported(recorder)
+writableState = ((mediaStatus And (MEDIA_OVERWRITE_ONLY Or MEDIA_BLANK Or MEDIA_APPENDABLE Or MEDIA_FINAL_SESSION)) <> 0)
+If Not (supported And writableState And ((mediaStatus And MEDIA_BLOCKING_MASK) = 0)) Then Fail "The disc in the drive cannot be written."
+If mediaType = DVD_ROM Then Fail "DVD-ROM media cannot be written."
+If Not ((mediaType >= DVD_RAM And mediaType <= DVD_R_DL) Or mediaType = DVD_PLUS_RW_DL) Then Fail "The inserted media is not a writable DVD."
+freeSectors = writer.FreeSectorsOnMedia
+If Err.Number <> 0 Then Fail "Could not check free DVD capacity: " & Err.Description
+If freeSectors < sectors Then Fail "The ISO file exceeds the free DVD capacity."
+writer.ClientName = "YouTube to DVD"
+writer.ForceMediaToBeClosed = True
+writer.ForceOverwrite = True
+WScript.ConnectObject writer, "BurnEvent_"
+writer.Write imageManager.Stream
+If Err.Number <> 0 Then Fail "IMAPI2 could not write the DVD: " & Err.Description
+WScript.Quit 0
 
 Sub Fail(message)
   WScript.Echo "ERROR|" & message
