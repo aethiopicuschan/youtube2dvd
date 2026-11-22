@@ -103,6 +103,11 @@ type root struct {
 	showDVDWriting       bool
 	dvdVideoFiles        []dvdVideoFile
 	selectedDVDVideo     string
+	// videoDetails reads the saved videos for the popup of the 書き込み
+	// page; dvdInfoPath is the video the popup shows.
+	videoDetails         videoDetailsCache
+	dvdInfoPopup         videoInfoPopup
+	dvdInfoPath          string
 	dvdVideoListMessage  string
 	dvdWriteQueue        []string
 	dvdDurationResults   chan dvdDurationResult
@@ -231,7 +236,9 @@ func (r *root) refreshDVDVideoFiles() {
 		return
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// Hidden files are the app's own work in progress, such as a
+		// download being written.
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		if _, ok := dvdVideoExtensions[strings.ToLower(filepath.Ext(entry.Name()))]; !ok {
@@ -296,12 +303,17 @@ func (r *root) handleDVDVideoClick(path string) {
 	if r.lastDVDVideoClick == path && now.Sub(r.lastDVDVideoClickAt) <= 500*time.Millisecond {
 		r.dvdWriteQueue = append(r.dvdWriteQueue, path)
 		r.lastDVDVideoClick = ""
+		r.dvdInfoPopup.Close()
 		guigui.RequestRebuild()
 		return
 	}
 	r.selectedDVDVideo = path
 	r.lastDVDVideoClick = path
 	r.lastDVDVideoClickAt = now
+	// A click on a video shows what it holds next to it.
+	r.dvdInfoPath = path
+	text, _ := r.videoDetails.describe(path)
+	r.dvdInfoPopup.ShowAt(image.Pt(ebiten.CursorPosition()), text)
 	guigui.RequestRebuild()
 }
 
@@ -741,6 +753,12 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.showDVDWriting = false
 		r.showManual = false
 		guigui.RequestRebuild()
+	}
+	if !r.showDVDWriting || r.dvdExportInFlight {
+		r.dvdInfoPopup.Close()
+	} else if r.dvdInfoPath != "" {
+		text, _ := r.videoDetails.describe(r.dvdInfoPath)
+		r.dvdInfoPopup.SetText(text)
 	}
 	if r.showSettings {
 		r.title.SetValue("設定")
@@ -1235,6 +1253,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.dvdProgressDialog)
 	adder.AddWidget(&r.audioPicker)
 	adder.AddWidget(&r.captionPicker)
+	adder.AddWidget(&r.dvdInfoPopup)
 	adder.AddWidget(&r.title)
 	if r.showSettings {
 		adder.AddWidget(&r.settingsPage)
@@ -1619,6 +1638,10 @@ func validateYouTubeURL(value string) string {
 func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	updated := false
 	r.settingsPage.poll(r.downloadInFlight || r.qualityLoading)
+	if r.videoDetails.changed.Swap(false) {
+		// A video was read; the pages showing it say what it holds.
+		updated = true
+	}
 	if r.dvdExportInFlight && r.dvdExportConverting && !r.dvdExportCanceling {
 		eta := r.dvdExportETAEstimate.Label(time.Now())
 		if eta != r.dvdExportETA {
@@ -2408,6 +2431,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.dvdProgressDialog, b)
 	layouter.LayoutWidget(&r.audioPicker, b)
 	layouter.LayoutWidget(&r.captionPicker, b)
+	layouter.LayoutWidget(&r.dvdInfoPopup, b)
 	sidebarWidth := 9 * u
 	layouter.LayoutWidget(&r.sidebar, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Max.Y))
 	layouter.LayoutWidget(&r.home, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Min.Y+2*u))
@@ -2420,6 +2444,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.divider, image.Rect(b.Min.X+u, navTop+2*u, b.Min.X+sidebarWidth-u, navTop+3*u))
 	layouter.LayoutWidget(&r.about, image.Rect(b.Min.X+u, navTop+3*u, b.Min.X+sidebarWidth-u, navTop+7*u))
 	content := image.Rect(b.Min.X+sidebarWidth+u, b.Min.Y+u, b.Max.X-u, b.Max.Y-u)
+	r.dvdInfoPopup.area = content
 	layouter.LayoutWidget(&r.title, image.Rect(content.Min.X, content.Min.Y, content.Max.X, content.Min.Y+u))
 	if r.showSettings {
 		layouter.LayoutWidget(&r.settingsPage, image.Rect(content.Min.X, content.Min.Y+3*u/2, content.Max.X, content.Max.Y))
