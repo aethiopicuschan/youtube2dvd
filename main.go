@@ -833,10 +833,12 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		})
 		videoURL := strings.TrimSpace(r.urlInput.Value())
 		r.confirmButton.SetText("確認")
-		context.SetEnabled(&r.confirmButton, videoURL != "" && validateYouTubeURL(videoURL) == "" && r.internetState == "接続あり" && !r.qualityLoading)
+		// The video cannot change while it downloads.
+		context.SetEnabled(&r.urlInput, !r.downloadInFlight)
+		context.SetEnabled(&r.confirmButton, videoURL != "" && validateYouTubeURL(videoURL) == "" && r.internetState == "接続あり" && !r.qualityLoading && !r.downloadInFlight)
 		r.confirmButton.OnDown(func(_ *guigui.Context) {
 			videoURL := strings.TrimSpace(r.urlInput.Value())
-			if videoURL == "" || validateYouTubeURL(videoURL) != "" || r.internetState != "接続あり" || r.qualityLoading {
+			if videoURL == "" || validateYouTubeURL(videoURL) != "" || r.internetState != "接続あり" || r.qualityLoading || r.downloadInFlight {
 				return
 			}
 			r.queueQualityLookup(videoURL)
@@ -854,6 +856,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 		r.qualitySelect.SetItems(qualityItems)
 		r.qualitySelect.OnItemSelected(func(_ *guigui.Context, index int) {
+			if r.downloadInFlight {
+				return
+			}
 			if item, ok := r.qualitySelect.ItemByIndex(index); ok {
 				r.selectedQualityItag = item.Value
 				guigui.RequestRebuild()
@@ -862,7 +867,8 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		if r.selectedQualityItag != 0 {
 			r.qualitySelect.SelectItemByValue(r.selectedQualityItag)
 		}
-		context.SetEnabled(&r.qualitySelect, len(qualityItems) > 0)
+		// The quality, like the captions, cannot change while it downloads.
+		context.SetEnabled(&r.qualitySelect, len(qualityItems) > 0 && !r.downloadInFlight)
 		r.buildCaptionRows(context)
 		r.buildCaptionPicker()
 		qualityStatus := r.qualityError
