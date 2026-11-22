@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -517,6 +518,9 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 		// subtitles when one was chosen, so the first stream is shown.
 		IncludeSubtitles: true,
 		ShowSubtitles:    true,
+		// A font of the operating system draws lower case and accented
+		// letters, which the built-in fonts cannot.
+		MenuFont: systemMenuFont(runtime.GOOS, os.Getenv),
 	}
 	if strings.TrimSpace(options.MenuTitle) == "" {
 		options.MenuTitle = "YouTube to DVD"

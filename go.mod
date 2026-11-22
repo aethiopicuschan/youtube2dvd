@@ -10,6 +10,7 @@ require (
 	github.com/hajimehoshi/ebiten/v2 v2.10.4
 	github.com/kkdai/youtube/v2 v2.10.8
 	github.com/ncruces/zenity v0.10.15
+	golang.org/x/image v0.48.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.44.0
 )
@@ -39,7 +40,6 @@ require (
 	github.com/thesyncim/goh264 v0.0.0-20260714162114-14b36a2bfcc4 // indirect
 	github.com/thesyncim/gopus v0.2.3 // indirect
 	github.com/thesyncim/govpx v0.0.0-20261018202535-159dce5b931a // indirect
-	golang.org/x/image v0.48.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	howett.net/plist v1.0.1 // indirect
 )
