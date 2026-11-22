@@ -178,7 +178,9 @@ Set imageManager = CreateObject("IMAPI2FS.MsftIsoImageManager")
 If Err.Number <> 0 Then Fail "Could not initialize the ISO image manager: " & Err.Description
 imageManager.SetPath isoPath
 If Err.Number <> 0 Then Fail "Could not read the ISO image: " & Err.Description
-If Not imageManager.Validate() Then Fail "The ISO image is not valid."
+' Validate returns nothing; it reports a problem as an error.
+imageManager.Validate
+If Err.Number <> 0 Then Fail "The ISO image is not valid: " & Err.Description
 
 For index = 0 To master.Count - 1
   Err.Clear
