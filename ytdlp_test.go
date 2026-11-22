@@ -151,7 +151,8 @@ func TestParseYtDlpProgress(t *testing.T) {
 }
 
 // Options that change how yt-dlp reaches the site or signs in belong to the
-// user's own yt-dlp configuration; the app must never pass them.
+// user's own yt-dlp configuration; the app must never pass them of its own
+// accord. Only the cookies.txt the user chose is passed, by the runner.
 var forbiddenYtDlpOptions = []string{
 	"--cookies",
 	"--cookies-from-browser",
@@ -519,7 +520,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if settings, err := loadSettings(path); err != nil || settings != (appSettings{}) {
 		t.Fatalf("missing file: %+v, %v; want the defaults", settings, err)
 	}
-	want := appSettings{UseYtDlp: true, YtDlpPath: "/opt/homebrew/bin/yt-dlp"}
+	want := appSettings{UseYtDlp: true, YtDlpPath: "/opt/homebrew/bin/yt-dlp", YtDlpCookiesPath: "/Users/me/cookies.txt"}
 	if err := saveSettings(path, want); err != nil {
 		t.Fatal(err)
 	}

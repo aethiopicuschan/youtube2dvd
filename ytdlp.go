@@ -22,8 +22,9 @@ import (
 
 // This file runs the yt-dlp that the user installed and enabled on the
 // settings page. The app only tells yt-dlp which format to fetch and where to
-// put it; everything about how yt-dlp talks to the site is left to yt-dlp and
-// the user's own yt-dlp configuration.
+// put it, and passes the cookies.txt the user chose on the settings page;
+// everything else about how yt-dlp talks to the site is left to yt-dlp and the
+// user's own yt-dlp configuration.
 
 const (
 	// ytDlpMaxHeight is the tallest picture worth downloading: DVD-Video is
@@ -41,15 +42,33 @@ type ytDlpRunner interface {
 	Run(ctx context.Context, args []string, onLine func(line string)) ([]byte, error)
 }
 
-// execYtDlpRunner runs the yt-dlp executable at path.
+// execYtDlpRunner runs the yt-dlp executable at path. cookies, when set, is
+// the cookies.txt the user chose, passed with --cookies.
 type execYtDlpRunner struct {
-	path string
+	path    string
+	cookies string
+}
+
+// ytDlpRunnerFor returns the runner for the yt-dlp of settings, with the
+// cookies.txt chosen there.
+func ytDlpRunnerFor(settings appSettings) (execYtDlpRunner, error) {
+	runner := execYtDlpRunner{path: settings.YtDlpPath}
+	if cookies := settings.YtDlpCookiesPath; cookies != "" {
+		if !isRegularFile(cookies) {
+			return execYtDlpRunner{}, fmt.Errorf("クッキーのファイルが見つかりません（%s）。「設定」で選び直してください。", cookies)
+		}
+		runner.cookies = cookies
+	}
+	return runner, nil
 }
 
 func (r execYtDlpRunner) Run(ctx context.Context, args []string, onLine func(line string)) ([]byte, error) {
 	path := strings.TrimSpace(r.path)
 	if path == "" {
 		return nil, &ytDlpStartError{err: exec.ErrNotFound}
+	}
+	if r.cookies != "" {
+		args = append([]string{"--cookies", r.cookies}, args...)
 	}
 	// The arguments go to yt-dlp as they are, without a shell in between.
 	cmd := exec.CommandContext(ctx, path, args...)
@@ -670,7 +689,11 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 // the built-in downloader.
 func videoDetails(ctx context.Context, settings appSettings, videoURL string) (videoInfo, error) {
 	if settings.UseYtDlp {
-		info, err := getYtDlpDetails(ctx, execYtDlpRunner{path: settings.YtDlpPath}, videoURL)
+		runner, err := ytDlpRunnerFor(settings)
+		if err != nil {
+			return videoInfo{}, err
+		}
+		info, err := getYtDlpDetails(ctx, runner, videoURL)
 		return info, explainBotCheck(err)
 	}
 	info, err := getYouTubeDetails(ctx, videoURL)
@@ -707,10 +730,14 @@ func downloadVideo(ctx context.Context, settings appSettings, videoURL string, q
 		path, warning, err := downloadYouTubeVideo(ctx, videoURL, quality, captions, onProgress)
 		return path, warning, explainBotCheck(err)
 	}
+	runner, err := ytDlpRunnerFor(settings)
+	if err != nil {
+		return "", "", err
+	}
 	directory, err := downloadDirectory()
 	if err != nil {
 		return "", "", err
 	}
-	path, warning, err := downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, audio, captions, muxerFor(quality.extension), onProgress)
+	path, warning, err := downloadWithYtDlp(ctx, runner, directory, videoURL, quality, audio, captions, muxerFor(quality.extension), onProgress)
 	return path, warning, explainBotCheck(err)
 }

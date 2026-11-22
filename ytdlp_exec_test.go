@@ -58,6 +58,34 @@ func TestInfoAndSubtitleRunsChooseAFormat(t *testing.T) {
 	}
 }
 
+func TestExecYtDlpRunnerPassesCookies(t *testing.T) {
+	path := writeFakeYtDlp(t, `for arg in "$@"; do echo "$arg"; done`)
+	for _, test := range []struct {
+		cookies string
+		want    []string
+	}{
+		{"", nil},
+		{"/Users/me/My Cookies/cookies.txt", []string{"--cookies", "/Users/me/My Cookies/cookies.txt"}},
+	} {
+		output, err := execYtDlpRunner{path: path, cookies: test.cookies}.Run(context.Background(), ytDlpInfoArgs(testVideoURL), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+		got := args[:min(2, len(args))]
+		if test.want == nil {
+			if slices.Contains(args, "--cookies") {
+				t.Errorf("args = %q, want no cookies", args)
+			}
+		} else if !slices.Equal(got, test.want) {
+			t.Errorf("args = %q, want %q first", args, test.want)
+		}
+		if args[len(args)-2] != "--" || args[len(args)-1] != testVideoURL {
+			t.Errorf("args = %q, want the URL last", args)
+		}
+	}
+}
+
 func TestExecYtDlpRunnerPassesArgumentsWithoutShell(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
 	path := writeFakeYtDlp(t, `for arg in "$@"; do echo "$arg"; done`)

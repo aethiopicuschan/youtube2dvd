@@ -142,6 +142,61 @@ func TestSettingsPageClearsSaveError(t *testing.T) {
 	}
 }
 
+func TestEnsureSettingsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "youtube2dvd", "settings.json")
+	settings := appSettings{UseYtDlp: true, YtDlpPath: "/usr/local/bin/yt-dlp"}
+	if err := ensureSettingsFile(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := loadSettings(path); err != nil || got != settings {
+		t.Errorf("written settings = %+v, %v", got, err)
+	}
+	// An existing file is left as it is.
+	if err := os.WriteFile(path, []byte(`{"use_yt_dlp": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSettingsFile(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != `{"use_yt_dlp": false}` {
+		t.Errorf("existing file became %q", data)
+	}
+}
+
+func TestSettingsPageOpensSettingsFile(t *testing.T) {
+	settings := appSettings{}
+	fail := true
+	opened := 0
+	page := &settingsPage{settings: &settings, openFile: func() error {
+		opened++
+		if fail {
+			return errors.New("no application")
+		}
+		return nil
+	}}
+	page.runFileAction(page.openFile, "設定ファイルの場所を開けませんでした")
+	if opened != 1 || !strings.Contains(page.fileMessage, "no application") {
+		t.Errorf("opened %d times, message %q", opened, page.fileMessage)
+	}
+	fail = false
+	page.runFileAction(page.openFile, "設定ファイルの場所を開けませんでした")
+	if opened != 2 || page.fileMessage != "" {
+		t.Errorf("opened %d times, message %q", opened, page.fileMessage)
+	}
+}
+
+func TestLoadSettingsTreatsEmptyFileAsDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	for _, content := range []string{"", " \n\t", "\ufeff"} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if settings, err := loadSettings(path); err != nil || settings != (appSettings{}) {
+			t.Errorf("%q: %+v, %v", content, settings, err)
+		}
+	}
+}
+
 func TestUsableSettings(t *testing.T) {
 	present := filepath.Join(t.TempDir(), "yt-dlp")
 	if err := os.WriteFile(present, nil, 0o700); err != nil {
@@ -162,5 +217,63 @@ func TestUsableSettings(t *testing.T) {
 		if got := usableSettings(test.in, test.find); got != test.want {
 			t.Errorf("usableSettings(%+v) = %+v, want %+v", test.in, got, test.want)
 		}
+	}
+}
+
+func TestRootReloadsAndResetsSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	cookies := filepath.Join(t.TempDir(), "cookies.txt")
+	saved := appSettings{YtDlpPath: "/usr/local/bin/yt-dlp", YtDlpCookiesPath: cookies}
+	if err := saveSettings(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	r := &root{settingsPath: path}
+	r.settingsPage.versionChecked = true
+	r.settingsPage.errorMessage = "old"
+
+	if err := r.reloadSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if r.settings != saved || r.settingsPage.versionChecked || r.settingsPage.errorMessage != "" {
+		t.Errorf("after reloading: %+v, page checked=%t, error=%q", r.settings, r.settingsPage.versionChecked, r.settingsPage.errorMessage)
+	}
+
+	// A broken file leaves the settings in use as they are.
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reloadSettings(); err == nil || r.settings != saved {
+		t.Errorf("broken file: %v, settings %+v", err, r.settings)
+	}
+
+	if err := r.resetSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || len(data) != 0 {
+		t.Errorf("file after resetting = %q, %v", data, err)
+	}
+	if r.settings != (appSettings{}) {
+		t.Errorf("settings after resetting = %+v", r.settings)
+	}
+
+	// Nothing changes while a download uses the settings.
+	r.settings = saved
+	r.downloadInFlight = true
+	if err := r.resetSettings(); !errors.Is(err, errSettingsInUse) || r.settings != saved {
+		t.Errorf("while downloading: %v, %+v", err, r.settings)
+	}
+	if err := r.reloadSettings(); !errors.Is(err, errSettingsInUse) {
+		t.Errorf("reload while downloading: %v", err)
+	}
+}
+
+func TestLoadSettingsAcceptsByteOrderMark(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte("\ufeff{\"use_yt_dlp\": true, \"yt_dlp_path\": \"/usr/local/bin/yt-dlp\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := loadSettings(path)
+	if err != nil || settings != (appSettings{UseYtDlp: true, YtDlpPath: "/usr/local/bin/yt-dlp"}) {
+		t.Errorf("settings = %+v, %v", settings, err)
 	}
 }

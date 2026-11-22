@@ -1,13 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/ncruces/zenity"
 )
 
 // appSettings holds the choices the user made on the settings page.
@@ -17,6 +23,9 @@ type appSettings struct {
 	UseYtDlp bool `json:"use_yt_dlp"`
 	// YtDlpPath is the yt-dlp executable to run.
 	YtDlpPath string `json:"yt_dlp_path"`
+	// YtDlpCookiesPath is a cookies.txt the user chose, passed to yt-dlp
+	// with --cookies; empty passes none.
+	YtDlpCookiesPath string `json:"yt_dlp_cookies_path,omitempty"`
 }
 
 // normalized returns the settings with yt-dlp turned off when no executable
@@ -48,7 +57,25 @@ func usableSettings(settings appSettings, find func() string) appSettings {
 	return settings.normalized()
 }
 
-// loadSettings reads the settings file. A missing file gives the defaults.
+// resetSettingsFile empties the settings file, which reads as the defaults.
+func resetSettingsFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, nil, 0o600)
+}
+
+// ensureSettingsFile writes settings to path unless the file is there
+// already, so that it can be opened before anything was saved.
+func ensureSettingsFile(path string, settings appSettings) error {
+	if isRegularFile(path) {
+		return nil
+	}
+	return saveSettings(path, settings)
+}
+
+// loadSettings reads the settings file. A missing or empty file gives the
+// defaults; resetting the settings empties the file.
 func loadSettings(path string) (appSettings, error) {
 	var settings appSettings
 	data, err := os.ReadFile(path)
@@ -57,6 +84,12 @@ func loadSettings(path string) (appSettings, error) {
 	}
 	if err != nil {
 		return settings, err
+	}
+	// An editor may save the file with a byte order mark, which JSON does
+	// not allow.
+	data = bytes.TrimPrefix(data, []byte("\ufeff"))
+	if len(bytes.TrimSpace(data)) == 0 {
+		return settings, nil
 	}
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return appSettings{}, err
@@ -149,4 +182,70 @@ func ytDlpCandidatePaths(goos string, getenv func(string) string, homeDir func()
 		}
 	}
 	return candidates
+}
+
+// chooseCookiesFile asks the user for a cookies.txt with a file dialog,
+// opened in the folder of current or else in Downloads. It returns
+// zenity.ErrCanceled when the user closes the dialog.
+func chooseCookiesFile(current string) (string, error) {
+	options := []zenity.Option{
+		zenity.Title("cookies.txt を選択"),
+		zenity.FileFilters{
+			{Name: "クッキーのファイル (*.txt)", Patterns: []string{"*.txt"}, CaseFold: true},
+			{Name: "すべてのファイル", Patterns: []string{"*"}},
+		},
+	}
+	directory := filepath.Dir(current)
+	if current == "" || !isDirectory(directory) {
+		directory = ""
+		if home, err := os.UserHomeDir(); err == nil {
+			directory = filepath.Join(home, "Downloads")
+		}
+	}
+	if directory != "" && isDirectory(directory) {
+		// A trailing separator makes it the folder the dialog opens in.
+		options = append(options, zenity.Filename(directory+string(filepath.Separator)))
+	}
+	path, err := zenity.SelectFile(options...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(path), nil
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// netscapeCookiesHeader is the first line yt-dlp requires of a cookies file,
+// as Python's MozillaCookieJar does.
+var netscapeCookiesHeader = regexp.MustCompile(`#( Netscape)? HTTP Cookie File`)
+
+// checkCookiesFile reports why yt-dlp could not read path as cookies, or nil.
+func checkCookiesFile(path string) error {
+	if !isRegularFile(path) {
+		return errors.New("ファイルが見つかりません")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.New("ファイルを開けません")
+	}
+	defer file.Close()
+	first, err := bufio.NewReader(io.LimitReader(file, 64<<10)).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return errors.New("ファイルを読み取れません")
+	}
+	if strings.HasPrefix(first, "\ufeff") {
+		// yt-dlp reads the file without dropping it, and then refuses the
+		// header after it.
+		return errors.New("ファイルの先頭にBOMが付いています。BOMなしのUTF-8で保存し直してください")
+	}
+	if netscapeCookiesHeader.MatchString(first) {
+		return nil
+	}
+	if trimmed := strings.TrimSpace(first); strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+		return errors.New("このファイルはJSON形式です。Netscape形式の cookies.txt を選んでください")
+	}
+	return errors.New("このファイルはNetscape形式の cookies.txt ではありません")
 }

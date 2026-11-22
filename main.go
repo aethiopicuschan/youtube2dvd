@@ -66,6 +66,7 @@ type root struct {
 	urlHint              basicwidget.Text
 	urlNotice            basicwidget.Text
 	downloadMethod       basicwidget.Text
+	downloadMethodCookie basicwidget.Image
 	confirmButton        basicwidget.Button
 	urlError             basicwidget.Text
 	urlErrorMessage      string
@@ -757,6 +758,12 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			}
 			return saveSettings(r.settingsPath, r.settings)
 		}
+		r.settingsPage.openFile, r.settingsPage.reloadFile, r.settingsPage.resetFile = nil, nil, nil
+		if r.settingsPath != "" {
+			r.settingsPage.openFile = r.openSettingsFolder
+			r.settingsPage.reloadFile = r.reloadSettings
+			r.settingsPage.resetFile = r.resetSettings
+		}
 	} else if r.showLicenses {
 		r.title.SetValue("Third-party licenses")
 		items := make([]basicwidget.ListItem[int], 0, len(r.packages)+1)
@@ -852,6 +859,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		downloadMethod := "取得方法：内蔵（最大 360p 程度）"
 		if r.settings.UseYtDlp {
 			downloadMethod = "取得方法：yt-dlp"
+			if r.showsCookieMethod() {
+				// The cookies.txt chosen on the settings page goes with it,
+				// shown by a cookie after the text.
+				downloadMethod += " with"
+			}
 		}
 		r.downloadMethod.SetValue(downloadMethod)
 		r.downloadMethod.SetSelectable(false)
@@ -860,6 +872,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		var downloadMethodStyle basicwidget.TextStyles
 		downloadMethodStyle.SetColorInRange(0, len(downloadMethod), color.RGBA{R: 90, G: 90, B: 90, A: 255})
 		r.downloadMethod.SetOverrideStyles(&downloadMethodStyle, false)
+		r.downloadMethodCookie.SetImage(cookieIcon())
 		r.urlInput.OnValueChanged(func(_ *guigui.Context, value string, _ bool) {
 			r.urlErrorMessage = validateYouTubeURL(value)
 			if strings.TrimSpace(value) != r.confirmedVideoURL {
@@ -1240,6 +1253,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		adder.AddWidget(&r.urlLabel)
 		adder.AddWidget(&r.urlNotice)
 		adder.AddWidget(&r.downloadMethod)
+		if r.showsCookieMethod() {
+			adder.AddWidget(&r.downloadMethodCookie)
+		}
 		adder.AddWidget(&r.urlInput)
 		adder.AddWidget(&r.confirmButton)
 		if r.urlErrorMessage != "" {
@@ -2234,6 +2250,54 @@ func (r *root) chosenCaptions() []requestedCaption {
 	return captions
 }
 
+// openSettingsFolder shows the settings file in the file manager, writing
+// it first when nothing was saved yet so that there is a file to show.
+func (r *root) openSettingsFolder() error {
+	if err := ensureSettingsFile(r.settingsPath, r.settings); err != nil {
+		return err
+	}
+	return revealInFileManager(r.settingsPath)
+}
+
+// errSettingsInUse reports that the settings cannot be replaced now: a
+// lookup or download is using them.
+var errSettingsInUse = errors.New("動画の情報の取得中やダウンロード中は変更できません")
+
+// reloadSettings reads the settings file again and uses what it says, as
+// at startup.
+func (r *root) reloadSettings() error {
+	if r.downloadInFlight || r.qualityLoading {
+		return errSettingsInUse
+	}
+	loaded, err := loadSettings(r.settingsPath)
+	if err != nil {
+		return err
+	}
+	r.settings = usableSettings(loaded, findYtDlp)
+	// Qualities listed with the settings before cannot be used.
+	r.clearConfirmedVideo()
+	r.settingsPage.reloaded()
+	return nil
+}
+
+// resetSettings empties the settings file and reloads it, which gives the
+// defaults.
+func (r *root) resetSettings() error {
+	if r.downloadInFlight || r.qualityLoading {
+		return errSettingsInUse
+	}
+	if err := resetSettingsFile(r.settingsPath); err != nil {
+		return err
+	}
+	return r.reloadSettings()
+}
+
+// showsCookieMethod reports whether the download page says that yt-dlp is
+// used with the cookies.txt chosen on the settings page.
+func (r *root) showsCookieMethod() bool {
+	return r.settings.UseYtDlp && r.settings.YtDlpCookiesPath != ""
+}
+
 // videoReadyToDownload reports whether the download page shows a confirmed
 // video with qualities to choose from.
 func (r *root) videoReadyToDownload() bool {
@@ -2418,7 +2482,15 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 		if r.showDownloads {
 			layouter.LayoutWidget(&r.urlLabel, image.Rect(content.Min.X, content.Min.Y+u, content.Max.X, content.Min.Y+2*u))
 			// The page title only uses the left end of its row.
-			layouter.LayoutWidget(&r.downloadMethod, image.Rect(content.Min.X+6*u, content.Min.Y, content.Max.X, content.Min.Y+u))
+			methodRight := content.Max.X
+			if r.showsCookieMethod() {
+				// The cookie closes the line, about as tall as the text.
+				size := u * 2 / 3
+				top := content.Min.Y + (u-size)/2
+				layouter.LayoutWidget(&r.downloadMethodCookie, image.Rect(content.Max.X-size, top, content.Max.X, top+size))
+				methodRight -= size + u/5
+			}
+			layouter.LayoutWidget(&r.downloadMethod, image.Rect(content.Min.X+6*u, content.Min.Y, methodRight, content.Min.Y+u))
 			layouter.LayoutWidget(&r.urlInput, image.Rect(content.Min.X, content.Min.Y+2*u, content.Max.X-5*u, content.Min.Y+3*u))
 			layouter.LayoutWidget(&r.confirmButton, image.Rect(content.Max.X-4*u, content.Min.Y+2*u, content.Max.X, content.Min.Y+3*u))
 			// The notice is a two-line footnote below the hint.
