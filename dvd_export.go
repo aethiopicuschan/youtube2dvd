@@ -513,11 +513,13 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 		Standard:  video2dvd.VideoStandardNTSC,
 		Aspect:    video2dvd.AspectRatio16x9,
 		MenuTitle: menuTitle,
-		// The subtitle tracks of a video become DVD subtitles in track order.
-		// A downloaded video has the 字幕 the user chose first and only has
-		// subtitles when one was chosen, so the first stream is shown.
-		IncludeSubtitles: true,
-		ShowSubtitles:    true,
+		// Every audio and subtitle track of a video goes on the disc, the one
+		// the file marks as default first; several audio streams are coded
+		// as AC-3. A downloaded video marks the 音声 and 字幕 the user chose
+		// as default, and the default subtitles are shown from the start.
+		IncludeAllAudio:      true,
+		IncludeSubtitles:     true,
+		ShowDefaultSubtitles: true,
 		// A font of the operating system draws lower case and accented
 		// letters, which the built-in fonts cannot.
 		MenuFont: systemMenuFont(runtime.GOOS, os.Getenv),
