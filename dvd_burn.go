@@ -63,7 +63,7 @@ func dvdBurnISO(ctx stdcontext.Context, isoPath string, progress dvdExportProgre
 		if err != nil {
 			return err
 		}
-		return runDVDWriterCommand(ctx, "drutil", []string{"-drive", drive, "burn", "-noverify", isoPath}, progress)
+		return runDrutil(ctx, []string{"-drive", drive, "burn", "-noverify", isoPath}, progress)
 	case "linux":
 		device, err := writableLinuxDVDDevice(ctx)
 		if err != nil {
