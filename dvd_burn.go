@@ -54,7 +54,7 @@ func dvdBurnISO(ctx stdcontext.Context, isoPath string, progress dvdExportProgre
 		return fmt.Errorf("ISOファイルのサイズがDVDのセクター境界に合っていません")
 	}
 	if progress != nil {
-		progress(dvdExportProgressUpdate{message: "DVDに書き込んでいます…", hasPercent: true, progressPercent: 0})
+		progress(dvdExportProgressUpdate{message: "映像を書き込んでいます…", hasPercent: true, progressPercent: 0})
 	}
 
 	switch runtime.GOOS {

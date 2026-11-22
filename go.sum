@@ -2,8 +2,8 @@ github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAw
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/aethiopicuschan/go-vp9 v0.0.0-20261121015925-4aa516dbdfd3 h1:+IyWVWX+GzVf08GdkNbnHa2ilUm5FcPfz0aAUxGXTYQ=
 github.com/aethiopicuschan/go-vp9 v0.0.0-20261121015925-4aa516dbdfd3/go.mod h1:00alyc82DTPTC8zwGk9kM2u1r8FP/WSiFWXdWAMbP7s=
-github.com/aethiopicuschan/video2dvd v0.8.2 h1:o3MdYG4iqygRyHL7DsQP2AwkZPqpdmoNxtzYY8w1Cyo=
-github.com/aethiopicuschan/video2dvd v0.8.2/go.mod h1:Epeiok2SzKk7CGusSnDNVLvrUDpplxIoALyl1f+wDDA=
+github.com/aethiopicuschan/video2dvd v1.0.0 h1:ds9TTpyKdxRRhUjuCeKueYhTPkq+yL3tR981UyFFtR0=
+github.com/aethiopicuschan/video2dvd v1.0.0/go.mod h1:Epeiok2SzKk7CGusSnDNVLvrUDpplxIoALyl1f+wDDA=
 github.com/akavel/rsrc v0.10.2 h1:Zxm8V5eI1hW4gGaYsJQUhxpjkENuG91ki8B4zCrvEsw=
 github.com/akavel/rsrc v0.10.2/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
 github.com/arabian9ts/aac-go v0.1.0 h1:e298pHWu+Xcv6VPU2hmS1UTmOq5C9KHD38eQcJR4K8c=

@@ -551,7 +551,7 @@ func (r *licenseRow) Measure(context *guigui.Context, constraints guigui.Constra
 func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	progressTitle := "ISOファイルを保存しています"
 	if r.dvdExportIsBurn {
-		progressTitle = "DVDを書き込んでいます"
+		progressTitle = "DVDに書き込んでいます"
 	}
 	r.dvdProgressDialog.title = progressTitle
 	r.dvdProgressDialog.message = r.dvdExportMessage
