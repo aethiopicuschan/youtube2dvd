@@ -176,6 +176,41 @@ func finishAudioTracks(tracks []audioTrack) videoAudio {
 	return videoAudio{Tracks: tracks}
 }
 
+// builtinAudioLanguage tells the language of the audio the built-in
+// downloader's single-file formats carry, which they do not say themselves:
+// the language of the track YouTube plays by default, where a dubbed video
+// names it, or else the language of the automatic captions, which YouTube
+// makes from the speech. It is empty when neither is there.
+func builtinAudioLanguage(video *youtube.Video) string {
+	for _, format := range video.Formats {
+		if format.AudioTrack != nil && format.AudioTrack.AudioIsDefault && format.AudioTrack.ID != "" {
+			code, _, _ := strings.Cut(format.AudioTrack.ID, ".")
+			return youTubeLanguageTag(code)
+		}
+	}
+	for _, track := range video.CaptionTracks {
+		if track.Kind == "asr" && track.LanguageCode != "" {
+			return youTubeLanguageTag(track.LanguageCode)
+		}
+	}
+	return ""
+}
+
+// ytDlpAudioLanguage tells the language of the audio of format, as yt-dlp
+// lists it, or else of the video. It is empty when yt-dlp does not know.
+func ytDlpAudioLanguage(format ytDlpFormatInfo, info ytDlpInfo) string {
+	language := format.Language
+	if language == "" {
+		language = info.Language
+	}
+	// yt-dlp marks audio description with a "-desc" language.
+	language = strings.TrimSuffix(language, "-desc")
+	if language == "" {
+		return ""
+	}
+	return youTubeLanguageTag(language)
+}
+
 // builtinHasOtherAudio reports whether a video has audio in more than one
 // language. The built-in downloader cannot fetch the separate audio streams
 // that carry them, which YouTube refuses to its client, so it only tells.

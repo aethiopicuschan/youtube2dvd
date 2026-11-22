@@ -103,3 +103,21 @@ func firstTrackID(tracks []mkv.Track, trackType mkv.TrackType) (uint64, error) {
 	}
 	return 0, fmt.Errorf("結合する%sトラックがありません", trackType)
 }
+
+// setMP4AudioLanguage records language, a BCP 47 tag, as the language of
+// the audio tracks of the MP4 at path, so that players and the DVD made from
+// it can name the audio. It replaces what the file says, which for a
+// downloaded file need not be right. An empty language changes nothing.
+func setMP4AudioLanguage(ctx context.Context, path, language string) error {
+	if language == "" {
+		return nil
+	}
+	code, bcp47 := mp4.LanguageFields(language)
+	return mp4.EditInPlace(ctx, path, func(c *mkv.Container) {
+		for i := range c.Tracks {
+			if track := &c.Tracks[i]; track.Type == mkv.AudioTrack {
+				track.Language, track.LanguageBCP47 = code, bcp47
+			}
+		}
+	})
+}

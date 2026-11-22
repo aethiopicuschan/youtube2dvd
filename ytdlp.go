@@ -224,6 +224,7 @@ func ytDlpVersion(ctx context.Context, runner ytDlpRunner) (string, error) {
 // ytDlpInfo is the part of "yt-dlp -J" output that the app reads.
 type ytDlpInfo struct {
 	Title             string                     `json:"title"`
+	Language          string                     `json:"language"`
 	Thumbnail         string                     `json:"thumbnail"`
 	Thumbnails        []ytDlpThumbnail           `json:"thumbnails"`
 	Formats           []ytDlpFormatInfo          `json:"formats"`
@@ -325,9 +326,11 @@ func ytDlpQualities(info ytDlpInfo) []downloadQuality {
 		}
 		if audio == nil {
 			singleStreamHeights[format.Height] = true
+			quality.audioLanguage = ytDlpAudioLanguage(format, info)
 		} else {
 			quality.ytDlpAudioFormat = audio.FormatID
 			quality.audioSize = audio.size()
+			quality.audioLanguage = ytDlpAudioLanguage(*audio, info)
 		}
 		qualities = append(qualities, quality)
 	}
@@ -613,7 +616,7 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 		}
 	}
 	if len(parts) == 1 && quality.ytDlpAudioFormat != "" {
-		parts = append(parts, part{formatID: quality.ytDlpAudioFormat, name: "audio.webm", size: quality.audioSize, stream: &audioStream{Default: true}})
+		parts = append(parts, part{formatID: quality.ytDlpAudioFormat, name: "audio.webm", size: quality.audioSize, stream: &audioStream{Language: quality.audioLanguage, Default: true}})
 	}
 
 	// Report several streams as one download. Without every size, or for a
@@ -660,6 +663,11 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 			return "", "", fmt.Errorf("動画と音声を結合できませんでした: %w", err)
 		}
 		downloadedPath = combinedPath
+	} else if quality.extension == ".mp4" {
+		// The single-file MP4 does not say what language its audio is in,
+		// or says English whatever it is. Failing to set it leaves the audio
+		// as it was, which is no reason to fail.
+		_ = setMP4AudioLanguage(ctx, downloadedPath, quality.audioLanguage)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", "", err

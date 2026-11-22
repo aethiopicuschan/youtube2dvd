@@ -93,6 +93,12 @@ func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string,
 	if err := downloadFormatToPath(ctx, client, video, format, tmpPath, onProgress); err != nil {
 		return "", "", err
 	}
+	if ext == ".mp4" {
+		// The file does not say what language its audio is in, or says
+		// English whatever it is. Failing to set it leaves the audio as it
+		// was, which is no reason to fail.
+		_ = setMP4AudioLanguage(ctx, tmpPath, builtinAudioLanguage(video))
+	}
 	var warning string
 	if len(captions) > 0 {
 		warning = addCaptions(ctx, tmpPath, captions, func(track captionTrack) ([]byte, error) {
@@ -194,12 +200,14 @@ type downloadQuality struct {
 
 	// The rest is set for a quality listed by yt-dlp: the title to save the
 	// video under, the format to download, the separate audio format to
-	// combine with it if any, and their sizes in bytes where known.
+	// combine with it if any, their sizes in bytes where known, and the
+	// language of the audio, if yt-dlp knows it.
 	title            string
 	ytDlpFormat      string
 	ytDlpAudioFormat string
 	videoSize        int64
 	audioSize        int64
+	audioLanguage    string
 }
 
 // videoInfo is what the app shows about a video before downloading it.
