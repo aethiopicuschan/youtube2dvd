@@ -16,5 +16,6 @@ func openURL(url string) {
 	default:
 		cmd = exec.Command("xdg-open", url)
 	}
+	hideConsoleWindow(cmd)
 	_ = cmd.Start()
 }

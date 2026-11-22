@@ -317,7 +317,9 @@ elseif ($hasMedia -and ($mediaStateKnown -or $recorderCount -eq 0)) { 'not-writa
 elseif ($hasMedia) { 'inserted-unknown' }
 elseif ($driveCount -gt 0 -and -not $hasMedia -and ($mediaStateKnown -or $wmiMediaStateKnown)) { 'empty' }
 else { 'unknown' }`
-	output, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	hideConsoleWindow(cmd)
+	output, err := cmd.Output()
 	if err != nil {
 		return dvdMediaUnknown
 	}

@@ -1825,7 +1825,9 @@ func hasDVDDrive() bool {
 		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 8*time.Second)
 		defer cancel()
 		command := "if (Get-CimInstance Win32_CDROMDrive) { exit 0 } else { exit 1 }"
-		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command).Run() == nil
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		hideConsoleWindow(cmd)
+		return cmd.Run() == nil
 	default:
 		return false
 	}

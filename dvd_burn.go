@@ -227,6 +227,7 @@ End Sub
 
 func runDVDWriterCommand(ctx stdcontext.Context, command string, args []string, progress dvdExportProgressReporter) error {
 	cmd := exec.CommandContext(ctx, command, args...)
+	hideConsoleWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("DVD書き込みを開始できません: %w", err)
