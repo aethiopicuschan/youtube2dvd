@@ -1337,13 +1337,39 @@ func statusColor(status string) color.Color {
 	}
 }
 
-const environmentCheckInterval = 30 * time.Second
+const (
+	environmentCheckInterval = 30 * time.Second
+	// environmentRetryInterval is how soon a failed internet check is
+	// repeated, so that a single slow connection right after start does not
+	// show the app as offline for a whole environmentCheckInterval.
+	environmentRetryInterval = 5 * time.Second
+	// environmentQuickRetries is how many failed checks in a row are
+	// repeated soon. After that the connection is probably really down, and
+	// checking every few seconds would only keep PowerShell or drutil busy.
+	environmentQuickRetries = 3
+	// internetCheckTimeout is how long the internet check waits for a
+	// connection to YouTube.
+	internetCheckTimeout = 10 * time.Second
+)
+
+// nextEnvironmentCheckDelay returns how long to wait before the next
+// environment check, given the result of the last one and how many checks
+// in a row before it found no internet connection.
+func nextEnvironmentCheckDelay(result environmentCheck, failuresBefore int) (delay time.Duration, failures int) {
+	if result.internet == "接続あり" {
+		return environmentCheckInterval, 0
+	}
+	failures = failuresBefore + 1
+	if failures <= environmentQuickRetries {
+		return environmentRetryInterval, failures
+	}
+	return environmentCheckInterval, failures
+}
+
 const helpAutoAdvanceInterval = 15 * time.Second
 
 func monitorEnvironment(checkResults chan environmentCheck) {
-	ticker := time.NewTicker(environmentCheckInterval)
-	defer ticker.Stop()
-
+	failures := 0
 	for {
 		result := checkEnvironment()
 		select {
@@ -1358,7 +1384,9 @@ func monitorEnvironment(checkResults chan environmentCheck) {
 			default:
 			}
 		}
-		<-ticker.C
+		var delay time.Duration
+		delay, failures = nextEnvironmentCheckDelay(result, failures)
+		time.Sleep(delay)
 	}
 }
 
@@ -1791,7 +1819,7 @@ func (r *root) clearConfirmedVideo() {
 
 func checkEnvironment() environmentCheck {
 	result := environmentCheck{internet: "未接続"}
-	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).Dial("tcp", "youtube.com:443")
+	conn, err := (&net.Dialer{Timeout: internetCheckTimeout}).Dial("tcp", "youtube.com:443")
 	if err == nil {
 		_ = conn.Close()
 		result.internet = "接続あり"
