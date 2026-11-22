@@ -269,25 +269,29 @@ func udevDriveSupportsDVDFeature(properties map[string]string, feature string) b
 }
 
 func checkDVDMediaWindows() string {
-	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 8*time.Second)
+	// Starting PowerShell and the disc recording service can take several
+	// seconds, more so while the drive spins up a disc.
+	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 20*time.Second)
 	defer cancel()
+	// IMAPI is the only reliable source: WMI's MediaLoaded is false for a
+	// blank disc, because it reports whether there is a volume to mount. So
+	// "no disc" is answered only when IMAPI looked and found none, and a
+	// failure of IMAPI gives "unknown", not "no disc".
 	const script = `$ErrorActionPreference = 'Stop'
-$cdromDrives = @()
 $driveCount = 0
-$hasMedia = $false
-$wmiMediaStateKnown = $false
-$hasWritable = $false
-$mediaStateKnown = $false
+$wmiHasMedia = $false
+$imapiFailed = $false
 $recorderCount = 0
+$hasMedia = $false
+$hasWritable = $false
 try {
   $cdromDrives = @(Get-CimInstance Win32_CDROMDrive)
   $driveCount = $cdromDrives.Count
   foreach ($drive in $cdromDrives) {
-    if ($null -ne $drive.MediaLoaded) {
-      $wmiMediaStateKnown = $true
-      if ([bool]$drive.MediaLoaded) { $hasMedia = $true }
-    }
+    if ($null -ne $drive.MediaLoaded -and [bool]$drive.MediaLoaded) { $wmiHasMedia = $true }
   }
+} catch { }
+try {
   $master = New-Object -ComObject IMAPI2.MsftDiscMaster2
   foreach ($id in $master) {
     try {
@@ -297,25 +301,26 @@ try {
       $format.Recorder = $recorder
       $recorderCount++
       $mediaType = [int]$format.CurrentPhysicalMediaType
-      $mediaStatus = [int]$format.CurrentMediaStatus
       if ($mediaType -ne 0) {
         $hasMedia = $true
-        $mediaStateKnown = $true
         $isDVD = (($mediaType -ge 4 -and $mediaType -le 11) -or $mediaType -eq 13)
         if ($isDVD -and $mediaType -ne 4) {
+          $mediaStatus = [int]$format.CurrentMediaStatus
           $supported = [bool]$format.IsCurrentMediaSupported($recorder)
           $hasWritableState = (($mediaStatus -band 0x000F) -ne 0)
           $hasBlockingState = (($mediaStatus -band 0xFC00) -ne 0)
           if ($supported -and $hasWritableState -and -not $hasBlockingState) { $hasWritable = $true }
         }
       }
-    } catch { }
+    } catch { $imapiFailed = $true }
   }
-} catch { }
+} catch { $imapiFailed = $true }
 if ($hasWritable) { 'writable' }
-elseif ($hasMedia -and ($mediaStateKnown -or $recorderCount -eq 0)) { 'not-writable' }
-elseif ($hasMedia) { 'inserted-unknown' }
-elseif ($driveCount -gt 0 -and -not $hasMedia -and ($mediaStateKnown -or $wmiMediaStateKnown)) { 'empty' }
+elseif ($hasMedia) { 'not-writable' }
+elseif ($imapiFailed) { if ($wmiHasMedia) { 'inserted-unknown' } else { 'unknown' } }
+elseif ($recorderCount -gt 0) { 'empty' }
+elseif ($wmiHasMedia) { 'not-writable' }
+elseif ($driveCount -gt 0) { 'empty' }
 else { 'unknown' }`
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	hideConsoleWindow(cmd)
