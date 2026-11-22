@@ -304,50 +304,83 @@ func dvdExportGeneratedBytes(workDir string) int64 {
 	return total
 }
 
-const (
-	// Upper bound: video2dvd codes video at 7.5 Mbit/s or less, next to
-	// 1.536 Mbit/s LPCM audio and about 3% of pack overhead.
-	dvdISOEstimateBytesPerSecond int64 = 1_170_000
-	dvdISOEstimateBaseOverhead   int64 = 2 << 20
-	dvdISOEstimateTitleOverhead  int64 = 1 << 20
-)
+// dvdExportOptions are the conversion options of an ISO image titled
+// menuTitle, apart from the font, which only drawing needs.
+func dvdExportOptions(menuTitle string) video2dvd.Options {
+	options := video2dvd.Options{
+		Standard:  video2dvd.VideoStandardNTSC,
+		Aspect:    video2dvd.AspectRatio16x9,
+		MenuTitle: menuTitle,
+		// Every audio and subtitle track of a video goes on the disc, the one
+		// the file marks as default first; several audio streams are coded
+		// as AC-3. A downloaded video marks the 音声 and 字幕 the user chose
+		// as default, and the default subtitles are shown from the start.
+		IncludeAllAudio:      true,
+		IncludeSubtitles:     true,
+		ShowDefaultSubtitles: true,
+	}
+	if strings.TrimSpace(options.MenuTitle) == "" {
+		options.MenuTitle = "YouTube to DVD"
+	}
+	return options
+}
 
+// dvdMediaDuration is the length of a video as a DVD title: the length of
+// the file, or of its longest video track when the file does not say.
+func dvdMediaDuration(media video2dvd.MP4Info) time.Duration {
+	duration := media.Duration
+	if duration <= 0 {
+		for _, track := range media.Tracks {
+			if track.Kind == video2dvd.TrackKindVideo && track.Duration > duration {
+				duration = track.Duration
+			}
+		}
+	}
+	return duration
+}
+
+// dvdAudioStreams counts the audio streams a video gives its DVD title with
+// dvdExportOptions: the tracks video2dvd decodes, AAC only in mono or
+// stereo, up to the eight a title can have.
+func dvdAudioStreams(media video2dvd.MP4Info) int {
+	const maxStreams = 8
+	streams := 0
+	for _, track := range media.Tracks {
+		if track.Kind != video2dvd.TrackKindAudio {
+			continue
+		}
+		switch {
+		case track.Codec == "mp4a" && track.Channels <= 2, track.Codec == "ac-3", track.Codec == "opus":
+			streams++
+		}
+	}
+	return min(streams, maxStreams)
+}
+
+// dvdISOSizeEstimate estimates the size of the ISO image of queue with
+// video2dvd's estimate for the options the conversion uses. It is an upper
+// estimate: video2dvd spends less than its bitrate on simple pictures. It
+// fails while the length of a video is not known.
 func dvdISOSizeEstimate(queue []string, files []dvdVideoFile) (int64, bool) {
 	if len(queue) == 0 {
 		return 0, false
 	}
-	byPath := make(map[string]time.Duration, len(files))
+	byPath := make(map[string]dvdVideoFile, len(files))
 	for _, file := range files {
-		byPath[file.path] = file.duration
+		byPath[file.path] = file
 	}
-
-	const maxInt64 = int64(^uint64(0) >> 1)
-	var totalDuration int64
+	titles := make([]video2dvd.TitleEstimate, 0, len(queue))
 	for _, path := range queue {
-		duration, ok := byPath[path]
-		if !ok || duration <= 0 || int64(duration) > maxInt64-totalDuration {
+		file, ok := byPath[path]
+		if !ok || file.duration <= 0 {
 			return 0, false
 		}
-		totalDuration += int64(duration)
+		titles = append(titles, video2dvd.TitleEstimate{Duration: file.duration, AudioStreams: file.audioStreams})
 	}
-
-	seconds := totalDuration / int64(time.Second)
-	remainder := totalDuration % int64(time.Second)
-	overhead := dvdISOEstimateBaseOverhead + int64(len(queue))*dvdISOEstimateTitleOverhead
-	if seconds > (maxInt64-overhead)/dvdISOEstimateBytesPerSecond {
+	estimate, err := video2dvd.EstimateDVDBytes(titles, dvdExportOptions(""))
+	if err != nil {
 		return 0, false
 	}
-	estimate := seconds * dvdISOEstimateBytesPerSecond
-	fraction := (remainder*dvdISOEstimateBytesPerSecond + int64(time.Second) - 1) / int64(time.Second)
-	if fraction > maxInt64-estimate-overhead {
-		return 0, false
-	}
-	estimate += fraction + overhead
-	const sectorSize int64 = 2048
-	if estimate > maxInt64-(sectorSize-1) {
-		return 0, false
-	}
-	estimate = (estimate + sectorSize - 1) / sectorSize * sectorSize
 	return estimate, true
 }
 
@@ -358,15 +391,7 @@ func dvdISOSizeEstimateFromInputs(inputs []string) int64 {
 		if err != nil {
 			return 0
 		}
-		duration := media.Duration
-		if duration <= 0 {
-			for _, track := range media.Tracks {
-				if track.Kind == video2dvd.TrackKindVideo && track.Duration > duration {
-					duration = track.Duration
-				}
-			}
-		}
-		files = append(files, dvdVideoFile{path: path, duration: duration})
+		files = append(files, dvdVideoFile{path: path, duration: dvdMediaDuration(media), audioStreams: dvdAudioStreams(media)})
 	}
 	estimate, ok := dvdISOSizeEstimate(inputs, files)
 	if !ok {
@@ -509,24 +534,10 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 		return "", fmt.Errorf("DVD変換器を準備できません: %w", err)
 	}
 	discPath := filepath.Join(stageDir, "disc")
-	options := video2dvd.Options{
-		Standard:  video2dvd.VideoStandardNTSC,
-		Aspect:    video2dvd.AspectRatio16x9,
-		MenuTitle: menuTitle,
-		// Every audio and subtitle track of a video goes on the disc, the one
-		// the file marks as default first; several audio streams are coded
-		// as AC-3. A downloaded video marks the 音声 and 字幕 the user chose
-		// as default, and the default subtitles are shown from the start.
-		IncludeAllAudio:      true,
-		IncludeSubtitles:     true,
-		ShowDefaultSubtitles: true,
-		// A font of the operating system draws lower case and accented
-		// letters, which the built-in fonts cannot.
-		MenuFont: systemMenuFont(runtime.GOOS, os.Getenv),
-	}
-	if strings.TrimSpace(options.MenuTitle) == "" {
-		options.MenuTitle = "YouTube to DVD"
-	}
+	options := dvdExportOptions(menuTitle)
+	// A font of the operating system draws lower case and accented letters,
+	// which the built-in fonts cannot.
+	options.MenuFont = systemMenuFont(runtime.GOOS, os.Getenv)
 	if progress != nil {
 		encoder.report("動画を確認しています…", 0)
 	}

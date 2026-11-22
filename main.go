@@ -196,9 +196,10 @@ type downloadProgress struct {
 }
 
 type dvdDurationResult struct {
-	requestID uint64
-	path      string
-	duration  time.Duration
+	requestID    uint64
+	path         string
+	duration     time.Duration
+	audioStreams int
 }
 
 type dvdVideoFile struct {
@@ -206,6 +207,9 @@ type dvdVideoFile struct {
 	name     string
 	size     int64
 	duration time.Duration
+	// audioStreams is the number of audio streams the file gives a DVD
+	// title, known together with duration.
+	audioStreams int
 }
 
 var dvdVideoExtensions = map[string]struct{}{
@@ -271,16 +275,8 @@ func (r *root) refreshDVDVideoFiles() {
 				if err != nil {
 					continue
 				}
-				duration := media.Duration
-				if duration <= 0 {
-					for _, track := range media.Tracks {
-						if track.Kind == video2dvd.TrackKindVideo && track.Duration > duration {
-							duration = track.Duration
-						}
-					}
-				}
-				if duration > 0 {
-					r.dvdDurationResults <- dvdDurationResult{requestID: requestID, path: path, duration: duration}
+				if duration := dvdMediaDuration(media); duration > 0 {
+					r.dvdDurationResults <- dvdDurationResult{requestID: requestID, path: path, duration: duration, audioStreams: dvdAudioStreams(media)}
 				}
 			}
 		}()
@@ -1780,6 +1776,7 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 				for i := range r.dvdVideoFiles {
 					if r.dvdVideoFiles[i].path == result.path {
 						r.dvdVideoFiles[i].duration = result.duration
+						r.dvdVideoFiles[i].audioStreams = result.audioStreams
 						updated = true
 						break
 					}
