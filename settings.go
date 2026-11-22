@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/ncruces/zenity"
 )
 
 // appSettings holds the choices the user made on the settings page.
@@ -38,6 +36,16 @@ func settingsFilePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(directory, "youtube2dvd", "settings.json"), nil
+}
+
+// usableSettings prepares settings read from the file for use: a yt-dlp
+// that was moved or reinstalled elsewhere since is looked for again, and
+// turned off when it is gone.
+func usableSettings(settings appSettings, find func() string) appSettings {
+	if settings.UseYtDlp && !isRegularFile(settings.YtDlpPath) {
+		settings.YtDlpPath = find()
+	}
+	return settings.normalized()
 }
 
 // loadSettings reads the settings file. A missing file gives the defaults.
@@ -88,16 +96,30 @@ func findYtDlp() string {
 		return path
 	}
 	for _, candidate := range ytDlpCandidatePaths(runtime.GOOS, os.Getenv, os.UserHomeDir) {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		if isRegularFile(candidate) {
 			return candidate
 		}
 	}
 	return ""
 }
 
+func isRegularFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 func ytDlpCandidatePaths(goos string, getenv func(string) string, homeDir func() (string, error)) []string {
 	home, _ := homeDir()
 	var candidates []string
+	// The executables yt-dlp publishes on its releases page are often left
+	// in the Downloads folder.
+	downloads := ""
+	if home != "" {
+		downloads = filepath.Join(home, "Downloads")
+	}
 	switch goos {
 	case "windows":
 		if local := getenv("LOCALAPPDATA"); local != "" {
@@ -112,58 +134,19 @@ func ytDlpCandidatePaths(goos string, getenv func(string) string, homeDir func()
 		if programData := getenv("ProgramData"); programData != "" {
 			candidates = append(candidates, filepath.Join(programData, "chocolatey", "bin", "yt-dlp.exe"))
 		}
+		if downloads != "" {
+			candidates = append(candidates, filepath.Join(downloads, "yt-dlp.exe"))
+		}
 	case "darwin":
-		candidates = append(candidates, "/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp")
+		candidates = append(candidates, "/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", "/opt/local/bin/yt-dlp")
 		if home != "" {
-			candidates = append(candidates, filepath.Join(home, ".local", "bin", "yt-dlp"))
+			candidates = append(candidates, filepath.Join(home, ".local", "bin", "yt-dlp"), filepath.Join(downloads, "yt-dlp_macos"))
 		}
 	default:
-		candidates = append(candidates, "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp")
+		candidates = append(candidates, "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp", "/snap/bin/yt-dlp")
 		if home != "" {
-			candidates = append(candidates, filepath.Join(home, ".local", "bin", "yt-dlp"))
+			candidates = append(candidates, filepath.Join(home, ".local", "bin", "yt-dlp"), filepath.Join(downloads, "yt-dlp_linux"))
 		}
 	}
 	return candidates
-}
-
-// chooseYtDlpPath asks the user for the yt-dlp executable with a file
-// dialog. It returns zenity.ErrCanceled when the user closes the dialog.
-func chooseYtDlpPath() (string, error) {
-	options := []zenity.Option{zenity.Title("yt-dlp の実行ファイルを選択")}
-	if directory := ytDlpDialogDirectory(runtime.GOOS, os.Getenv, os.UserHomeDir, isDirectory); directory != "" {
-		// A trailing separator makes it the folder the dialog opens in.
-		options = append(options, zenity.Filename(directory+string(filepath.Separator)))
-	}
-	if runtime.GOOS == "windows" {
-		options = append(options, zenity.FileFilters{{Name: "実行ファイル (*.exe)", Patterns: []string{"*.exe"}, CaseFold: true}})
-	}
-	path, err := zenity.SelectFile(options...)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(path), nil
-}
-
-// ytDlpDialogDirectory returns the folder to open the file dialog in: the
-// first usual install location of yt-dlp that exists, or else the Downloads
-// folder, where a downloaded yt-dlp executable is often left.
-func ytDlpDialogDirectory(goos string, getenv func(string) string, homeDir func() (string, error), exists func(string) bool) string {
-	for _, candidate := range ytDlpCandidatePaths(goos, getenv, homeDir) {
-		if directory := filepath.Dir(candidate); exists(directory) {
-			return directory
-		}
-	}
-	home, err := homeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	if downloads := filepath.Join(home, "Downloads"); exists(downloads) {
-		return downloads
-	}
-	return home
-}
-
-func isDirectory(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }

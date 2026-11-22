@@ -671,6 +671,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			return
 		}
 		r.showSettings = true
+		r.settingsPage.opened()
 		r.showDownloads = false
 		r.showDVDWriting = false
 		r.showLicenses = false
@@ -1605,6 +1606,7 @@ func validateYouTubeURL(value string) string {
 
 func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	updated := false
+	r.settingsPage.poll(r.downloadInFlight || r.qualityLoading)
 	if r.dvdExportInFlight && r.dvdExportConverting && !r.dvdExportCanceling {
 		eta := r.dvdExportETAEstimate.Label(time.Now())
 		if eta != r.dvdExportETA {
@@ -2538,12 +2540,7 @@ func main() {
 	if settingsPath != "" {
 		settings, _ = loadSettings(settingsPath)
 	}
-	if settings.YtDlpPath == "" {
-		// Only a suggestion for the path field: yt-dlp stays off until the
-		// user turns it on.
-		settings.YtDlpPath = findYtDlp()
-	}
-	settings = settings.normalized()
+	settings = usableSettings(settings, findYtDlp)
 	checkResults := make(chan environmentCheck, 1)
 	app := &root{
 		packages:             full,

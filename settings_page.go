@@ -10,25 +10,30 @@ import (
 
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
-	"github.com/ncruces/zenity"
 )
 
-type ytDlpCheckResult struct {
+// ytDlpLookupResult is what a search for yt-dlp found: the executable and
+// the version it reports, or why it cannot be used.
+type ytDlpLookupResult struct {
 	requestID uint64
+	path      string
 	version   string
 	err       error
 }
 
-// settingsPage lets the user choose how videos are downloaded.
+// errYtDlpNotFound reports that no yt-dlp was found where it is usually
+// installed.
+var errYtDlpNotFound = errors.New("yt-dlp が見つかりませんでした。yt-dlp をインストールしてから、もう一度チェックを入れてください。")
+
+// settingsPage lets the user choose how videos are downloaded. yt-dlp is
+// turned on with a checkbox alone: the app then looks for the executable
+// itself, checks that it runs, and only shows where it is.
 type settingsPage struct {
 	guigui.DefaultWidget
 
 	heading     basicwidget.Text
 	useCheckbox basicwidget.Checkbox
 	useLabel    basicwidget.Text
-	pathLabel   basicwidget.Text
-	pathInput   basicwidget.TextInput
-	checkButton basicwidget.Button
 	status      basicwidget.Text
 	note        basicwidget.Text
 
@@ -36,75 +41,113 @@ type settingsPage struct {
 	// busy disables the controls while a lookup or download is using the
 	// settings.
 	busy bool
-	// onChange is called after the user changed a setting. An error it
-	// returns is shown on the page.
+	// onChange is called after a setting changed. An error it returns is
+	// shown on the page.
 	onChange func() error
+	// lookup finds and checks yt-dlp; nil uses lookUpYtDlp. Tests replace
+	// it.
+	lookup func(ctx context.Context) (path, version string, err error)
 
-	statusMessage  string
-	statusFailed   bool
-	checking       bool
-	checkRequestID uint64
-	checkResults   chan ytDlpCheckResult
-	cancelCheck    context.CancelFunc
+	// searching is set while yt-dlp is looked for after the checkbox was
+	// turned on; the checkbox shows on, but yt-dlp is not used yet.
+	searching bool
+	// version is the version of the yt-dlp in use, once it was checked.
+	version        string
+	versionChecked bool
+	errorMessage   string
+	// saveError tells that the settings could not be saved; it goes away
+	// with the next save that works.
+	saveError       string
+	lookupRequestID uint64
+	lookupResults   chan ytDlpLookupResult
+	cancelLookup    context.CancelFunc
 }
 
-func (p *settingsPage) changed() {
-	p.resetCheck()
+// lookUpYtDlp finds yt-dlp where it is usually installed and checks that it
+// runs.
+func lookUpYtDlp(ctx context.Context) (string, string, error) {
+	path := findYtDlp()
+	if path == "" {
+		return "", "", errYtDlpNotFound
+	}
+	version, err := ytDlpVersion(ctx, execYtDlpRunner{path: path})
+	return path, version, err
+}
+
+// checkVersion checks the yt-dlp at path, which is already in use, so that
+// the page can show its version.
+func checkVersion(path string) func(ctx context.Context) (string, string, error) {
+	return func(ctx context.Context) (string, string, error) {
+		version, err := ytDlpVersion(ctx, execYtDlpRunner{path: path})
+		return path, version, err
+	}
+}
+
+func (p *settingsPage) save() {
+	p.saveError = ""
 	if p.onChange != nil {
 		if err := p.onChange(); err != nil {
-			p.statusMessage = "設定を保存できませんでした: " + err.Error()
-			p.statusFailed = true
+			p.saveError = "設定を保存できませんでした: " + err.Error()
 		}
 	}
 	guigui.RequestRebuild()
 }
 
-// selectYtDlp lets the user pick the yt-dlp executable and stores its path.
-func (p *settingsPage) selectYtDlp() {
-	path, err := chooseYtDlpPath()
-	if errors.Is(err, zenity.ErrCanceled) {
-		return
+// opened is called each time the page is shown, so that the yt-dlp in use
+// is checked again: it may have been removed or updated meanwhile.
+func (p *settingsPage) opened() {
+	if !p.searching && p.cancelLookup == nil {
+		p.versionChecked = false
 	}
-	if err != nil || path == "" {
-		p.resetCheck()
-		p.statusMessage = "yt-dlp の実行ファイルを選択できませんでした。"
-		p.statusFailed = true
-		guigui.RequestRebuild()
-		return
-	}
-	p.settings.YtDlpPath = path
-	p.changed()
 }
 
-func (p *settingsPage) resetCheck() {
-	if p.cancelCheck != nil {
-		p.cancelCheck()
-		p.cancelCheck = nil
+func (p *settingsPage) cancel() {
+	if p.cancelLookup != nil {
+		p.cancelLookup()
+		p.cancelLookup = nil
 	}
-	p.checkRequestID++
-	p.checking = false
-	p.statusMessage = ""
-	p.statusFailed = false
+	p.lookupRequestID++
+	p.searching = false
 }
 
-func (p *settingsPage) startCheck() {
-	p.resetCheck()
-	if p.checkResults == nil {
-		p.checkResults = make(chan ytDlpCheckResult, 4)
+// start runs lookup in the background; Tick takes its result.
+func (p *settingsPage) start(lookup func(ctx context.Context) (string, string, error)) {
+	p.cancel()
+	if p.lookupResults == nil {
+		p.lookupResults = make(chan ytDlpLookupResult, 4)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	p.cancelCheck = cancel
-	p.checking = true
-	requestID := p.checkRequestID
-	runner := execYtDlpRunner{path: p.settings.YtDlpPath}
-	results := p.checkResults
+	p.cancelLookup = cancel
+	requestID := p.lookupRequestID
+	results := p.lookupResults
 	go func() {
-		version, err := ytDlpVersion(ctx, runner)
+		path, version, err := lookup(ctx)
 		select {
-		case results <- ytDlpCheckResult{requestID: requestID, version: version, err: err}:
+		case results <- ytDlpLookupResult{requestID: requestID, path: path, version: version, err: err}:
 		default:
 		}
 	}()
+}
+
+// turnOn starts looking for yt-dlp. It is used once it was found and runs.
+func (p *settingsPage) turnOn() {
+	p.errorMessage = ""
+	p.version = ""
+	p.versionChecked = false
+	lookup := p.lookup
+	if lookup == nil {
+		lookup = lookUpYtDlp
+	}
+	p.start(lookup)
+	p.searching = true
+	guigui.RequestRebuild()
+}
+
+func (p *settingsPage) turnOff() {
+	p.cancel()
+	p.errorMessage = ""
+	p.settings.UseYtDlp = false
+	p.save()
 }
 
 func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
@@ -112,13 +155,16 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 		&p.heading,
 		&p.useCheckbox,
 		&p.useLabel,
-		&p.pathLabel,
-		&p.pathInput,
-		&p.checkButton,
 		&p.status,
 		&p.note,
 	} {
 		adder.AddWidget(widget)
+	}
+
+	// The yt-dlp in use is checked when the page is shown, but not while a
+	// lookup or download uses it.
+	if p.settings.UseYtDlp && !p.busy && !p.searching && !p.versionChecked && p.cancelLookup == nil {
+		p.start(checkVersion(p.settings.YtDlpPath))
 	}
 
 	p.heading.SetValue("ダウンロード方法")
@@ -128,15 +174,17 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 	headingStyle.SetWeightInRange(0, len(p.heading.Value()), 600)
 	p.heading.SetOverrideStyles(&headingStyle, false)
 
-	p.useCheckbox.SetValue(p.settings.UseYtDlp)
-	// yt-dlp can only be turned on once there is an executable to run.
-	context.SetEnabled(&p.useCheckbox, !p.busy && p.settings.YtDlpPath != "")
+	p.useCheckbox.SetValue(p.settings.UseYtDlp || p.searching)
+	context.SetEnabled(&p.useCheckbox, !p.busy && !p.searching)
 	p.useCheckbox.OnValueChanged(func(_ *guigui.Context, value bool) {
-		if p.busy || p.settings.UseYtDlp == value || (value && p.settings.YtDlpPath == "") {
+		if p.busy || p.searching || value == p.settings.UseYtDlp {
 			return
 		}
-		p.settings.UseYtDlp = value
-		p.changed()
+		if value {
+			p.turnOn()
+		} else {
+			p.turnOff()
+		}
 	})
 	useLabel := "外部の yt-dlp を使ってダウンロードする"
 	p.useLabel.SetValue(useLabel)
@@ -144,67 +192,18 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 	p.useLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	// The label is greyed out together with its checkbox.
 	var useLabelStyle basicwidget.TextStyles
-	if p.busy || p.settings.YtDlpPath == "" {
+	if p.busy || p.searching {
 		useLabelStyle.SetColorInRange(0, len(useLabel), color.RGBA{R: 145, G: 145, B: 145, A: 255})
 	}
 	p.useLabel.SetOverrideStyles(&useLabelStyle, false)
 
-	p.pathLabel.SetValue("yt-dlp 実行ファイルのパス")
-	p.pathLabel.SetSelectable(false)
-	p.pathLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
-	p.pathInput.SetValue(p.settings.YtDlpPath)
-	p.pathInput.SetPlaceholder("yt-dlp が見つかりません。パスを入力するか「選択」で探してください")
-	context.SetEnabled(&p.pathInput, !p.busy)
-	p.pathInput.OnValueChanged(func(_ *guigui.Context, text string, _ bool) {
-		path := strings.TrimSpace(text)
-		if p.busy || p.settings.YtDlpPath == path {
-			return
-		}
-		updated := *p.settings
-		updated.YtDlpPath = path
-		*p.settings = updated.normalized()
-		p.changed()
-	})
-
-	// Without a path the button finds the executable instead of checking it.
-	if p.settings.YtDlpPath == "" {
-		p.checkButton.SetText("選択")
-		context.SetEnabled(&p.checkButton, !p.busy)
-	} else {
-		p.checkButton.SetText("確認")
-		context.SetEnabled(&p.checkButton, !p.checking)
-	}
-	p.checkButton.OnDown(func(_ *guigui.Context) {
-		if p.settings.YtDlpPath == "" {
-			if !p.busy {
-				p.selectYtDlp()
-			}
-			return
-		}
-		if p.checking {
-			return
-		}
-		p.startCheck()
-		guigui.RequestRebuild()
-	})
-
-	status := p.statusMessage
-	if p.checking {
-		status = "yt-dlp を確認しています…"
-	}
+	status, statusColor := p.statusText()
 	p.status.SetValue(status)
 	p.status.SetSelectable(false)
 	p.status.SetMultiline(true)
 	p.status.SetWrapMode(basicwidget.WrapModeNormal)
 	var statusStyle basicwidget.TextStyles
-	switch {
-	case p.checking:
-		statusStyle.SetColorInRange(0, len(status), color.RGBA{R: 100, G: 100, B: 100, A: 255})
-	case p.statusFailed:
-		statusStyle.SetColorInRange(0, len(status), color.RGBA{R: 190, G: 35, B: 35, A: 255})
-	default:
-		statusStyle.SetColorInRange(0, len(status), color.RGBA{R: 35, G: 120, B: 65, A: 255})
-	}
+	statusStyle.SetColorInRange(0, len(status), statusColor)
 	p.status.SetOverrideStyles(&statusStyle, false)
 
 	const ytDlpURL = "https://github.com/yt-dlp/yt-dlp"
@@ -228,32 +227,75 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 	return nil
 }
 
-func (p *settingsPage) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
-	if p.checkResults == nil {
-		return nil
+// statusText is what the page says about yt-dlp below the checkbox.
+func (p *settingsPage) statusText() (string, color.Color) {
+	gray := color.RGBA{R: 100, G: 100, B: 100, A: 255}
+	switch {
+	case p.saveError != "":
+		return p.saveError, color.RGBA{R: 190, G: 35, B: 35, A: 255}
+	case p.searching:
+		return "yt-dlp を探しています…", gray
+	case p.errorMessage != "":
+		return p.errorMessage, color.RGBA{R: 190, G: 35, B: 35, A: 255}
+	case p.settings.UseYtDlp:
+		text := "使用する yt-dlp：" + p.settings.YtDlpPath
+		if p.version != "" {
+			text += "\nバージョン：" + p.version
+		}
+		return text, gray
+	}
+	return "", gray
+}
+
+// poll takes the result of a search or check, if there is one. The app
+// calls it on every frame, whichever page is shown, so that a search the user
+// left the page during still ends. While busy, a lookup or download uses the
+// settings, and the result waits.
+func (p *settingsPage) poll(busy bool) {
+	p.busy = busy
+	if p.lookupResults == nil || busy {
+		return
 	}
 	for {
 		select {
-		case result := <-p.checkResults:
-			if result.requestID != p.checkRequestID {
+		case result := <-p.lookupResults:
+			if result.requestID != p.lookupRequestID {
 				continue
 			}
-			if p.cancelCheck != nil {
-				p.cancelCheck()
-				p.cancelCheck = nil
-			}
-			p.checking = false
-			if result.err != nil {
-				p.statusMessage = result.err.Error()
-				p.statusFailed = true
-			} else {
-				p.statusMessage = "yt-dlp " + result.version + " を実行できました。"
-				p.statusFailed = false
-			}
+			p.handle(result)
 			guigui.RequestRebuild()
 		default:
-			return nil
+			return
 		}
+	}
+}
+
+// handle takes the result of a search for yt-dlp, or of the check of the
+// one in use.
+func (p *settingsPage) handle(result ytDlpLookupResult) {
+	if p.cancelLookup != nil {
+		p.cancelLookup()
+		p.cancelLookup = nil
+	}
+	wasSearching := p.searching
+	p.searching = false
+	p.versionChecked = true
+	if result.err != nil {
+		// A yt-dlp that cannot be found or does not run is not used.
+		p.errorMessage = result.err.Error()
+		p.version = ""
+		if wasSearching || p.settings.UseYtDlp {
+			p.settings.UseYtDlp = false
+			p.save()
+		}
+		return
+	}
+	p.errorMessage = ""
+	p.version = result.version
+	if wasSearching {
+		p.settings.YtDlpPath = result.path
+		p.settings.UseYtDlp = true
+		p.save()
 	}
 }
 
@@ -268,17 +310,15 @@ func (p *settingsPage) Layout(context *guigui.Context, bounds *guigui.WidgetBoun
 	checkboxSize := p.useCheckbox.Measure(context, guigui.Constraints{})
 	checkboxTop := top + (u-checkboxSize.Y)/2
 	layouter.LayoutWidget(&p.useCheckbox, image.Rect(b.Min.X, checkboxTop, b.Min.X+checkboxSize.X, checkboxTop+checkboxSize.Y))
-	layouter.LayoutWidget(&p.useLabel, image.Rect(b.Min.X+checkboxSize.X+u/3, top, b.Max.X, top+u))
+	labelLeft := b.Min.X + checkboxSize.X + u/3
+	layouter.LayoutWidget(&p.useLabel, image.Rect(labelLeft, top, b.Max.X, top+u))
 
-	top += 3 * u / 2
-	layouter.LayoutWidget(&p.pathLabel, image.Rect(b.Min.X, top, b.Max.X, top+u))
-	top += u
-	layouter.LayoutWidget(&p.pathInput, image.Rect(b.Min.X, top, b.Max.X-5*u, top+u))
-	layouter.LayoutWidget(&p.checkButton, image.Rect(b.Max.X-4*u, top, b.Max.X, top+u))
-
+	// The status is indented under the label of the checkbox it belongs to,
+	// and as tall as its wrapped lines.
 	top += u + u/4
-	layouter.LayoutWidget(&p.status, image.Rect(b.Min.X, top, b.Max.X, top+2*u))
+	statusHeight := max(2*u, p.status.Measure(context, guigui.FixedWidthConstraints(b.Max.X-labelLeft)).Y)
+	layouter.LayoutWidget(&p.status, image.Rect(labelLeft, top, b.Max.X, top+statusHeight))
 
-	top += 2*u + u/4
+	top += statusHeight + u/2
 	layouter.LayoutWidget(&p.note, image.Rect(b.Min.X, top, b.Max.X, b.Max.Y))
 }

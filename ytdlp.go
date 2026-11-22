@@ -167,8 +167,14 @@ func ytDlpCommonArgs() []string {
 // ytDlpInfoArgs asks for the description of one video as JSON. The URL comes
 // after "--" so that it is never read as an option.
 func ytDlpInfoArgs(videoURL string) []string {
-	return append(ytDlpCommonArgs(), "-J", "--", videoURL)
+	return append(ytDlpCommonArgs(), "-f", ytDlpAnyFormat, "-J", "--", videoURL)
 }
+
+// ytDlpAnyFormat is a format choice that any video has. Runs that do not
+// download the video give it all the same: it only replaces a -f in the
+// user's yt-dlp configuration, with which yt-dlp would fail when that format
+// is missing.
+const ytDlpAnyFormat = "b/bv*/ba"
 
 // ytDlpDownloadArgs asks for one format of one video, written to outputPath.
 func ytDlpDownloadArgs(formatID, outputPath, videoURL string) []string {

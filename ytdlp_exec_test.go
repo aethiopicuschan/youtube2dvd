@@ -45,6 +45,19 @@ func TestExecYtDlpRunnerOutputAndLines(t *testing.T) {
 	}
 }
 
+func TestInfoAndSubtitleRunsChooseAFormat(t *testing.T) {
+	// A -f in the user's yt-dlp configuration would make yt-dlp fail where
+	// that format is missing; runs that download nothing give their own.
+	for name, args := range map[string][]string{
+		"info":      ytDlpInfoArgs(testVideoURL),
+		"subtitles": ytDlpSubtitleArgs([]captionTrack{{ID: "ja"}}, "/tmp/captions", testVideoURL),
+	} {
+		if f := slices.Index(args, "-f"); f < 0 || args[f+1] != ytDlpAnyFormat {
+			t.Errorf("%s arguments = %q, want -f %s", name, args, ytDlpAnyFormat)
+		}
+	}
+}
+
 func TestExecYtDlpRunnerPassesArgumentsWithoutShell(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
 	path := writeFakeYtDlp(t, `for arg in "$@"; do echo "$arg"; done`)

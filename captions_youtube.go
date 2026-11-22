@@ -341,7 +341,7 @@ func fetchBuiltinCaptionVTT(ctx context.Context, video *youtube.Video, id string
 // when a key is both an uploader and an automatic one, which the "-orig"
 // keys of automatic tracks never are.
 func ytDlpSubtitleArgs(tracks []captionTrack, outputBase, videoURL string) []string {
-	args := append(ytDlpCommonArgs(), "--skip-download")
+	args := append(ytDlpCommonArgs(), "-f", ytDlpAnyFormat, "--skip-download")
 	var keys []string
 	uploader, auto := false, false
 	for _, track := range tracks {
