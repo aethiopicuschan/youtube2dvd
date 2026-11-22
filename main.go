@@ -22,6 +22,7 @@ import (
 
 	"github.com/aethiopicuschan/video2dvd"
 	"github.com/aethiopicuschan/youtube2dvd/internal/licenses"
+	_ "github.com/ebitengine/hideconsole"
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
 	_ "github.com/guigui-gui/guigui/basicwidget/cjkfont"
