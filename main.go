@@ -131,6 +131,9 @@ type root struct {
 	downloadResults      chan downloadResult
 	downloadProgresses   chan downloadProgress
 	downloadStatus       string
+	// downloadWarning is the part of downloadStatus that warns about
+	// captions that could not be added.
+	downloadWarning      string
 	downloadedBytes      int64
 	totalBytes           int64
 	downloadFailed       bool
@@ -138,23 +141,37 @@ type root struct {
 	cancelDownload       stdcontext.CancelFunc
 	qualityLookupResults chan qualityLookupResult
 	qualityOptions       []downloadQuality
-	selectedQualityItag  int
-	qualityLookupURL     string
-	confirmedVideoURL    string
-	qualityLookupAt      time.Time
-	qualityRequestID     uint64
-	qualityLoading       bool
-	qualityError         string
-	cancelQualityLookup  stdcontext.CancelFunc
-	internetState        string
-	driveState           string
-	discState            string
-	dvdDrives            []dvdDrive
+	videoCaptions        videoCaptions
+	// selectedCaptionID is the caption track to embed as the default one,
+	// or "" for none; additionalCaptionIDs are the other tracks to embed.
+	selectedCaptionID       string
+	additionalCaptionIDs    map[string]bool
+	captionLabel            basicwidget.Text
+	captionSelect           basicwidget.Select[string]
+	captionNone             basicwidget.Text
+	additionalCaptionLabel  basicwidget.Text
+	additionalCaptionButton basicwidget.Button
+	additionalCaptionText   basicwidget.Text
+	captionPicker           captionPickerDialog
+	selectedQualityItag     int
+	qualityLookupURL        string
+	confirmedVideoURL       string
+	qualityLookupAt         time.Time
+	qualityRequestID        uint64
+	qualityLoading          bool
+	qualityError            string
+	cancelQualityLookup     stdcontext.CancelFunc
+	internetState           string
+	driveState              string
+	discState               string
+	dvdDrives               []dvdDrive
 }
 
 type downloadResult struct {
 	path string
-	err  error
+	// warning tells what went wrong with the captions of a saved video.
+	warning string
+	err     error
 }
 
 type downloadProgress struct {
@@ -846,9 +863,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			r.qualitySelect.SelectItemByValue(r.selectedQualityItag)
 		}
 		context.SetEnabled(&r.qualitySelect, len(qualityItems) > 0)
+		r.buildCaptionRows(context)
+		r.buildCaptionPicker()
 		qualityStatus := r.qualityError
 		if r.qualityLoading {
-			qualityStatus = "動画の画質を取得しています…"
+			qualityStatus = "動画の情報を取得しています…"
 		} else if qualityStatus == "" && videoURL != "" && validateYouTubeURL(videoURL) == "" && r.internetState != "接続あり" {
 			qualityStatus = "画質の取得にはインターネット接続が必要です。"
 		}
@@ -889,11 +908,13 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			r.downloadInFlight = true
 			r.downloadFailed = false
 			r.downloadStatus = "動画をダウンロードしています…"
+			r.downloadWarning = ""
 			r.downloadedBytes = 0
 			r.totalBytes = 0
 			settings := r.settings
+			captions := r.chosenCaptions()
 			go func() {
-				path, err := downloadVideo(ctx, settings, videoURL, quality, func(progress downloadProgress) {
+				path, warning, err := downloadVideo(ctx, settings, videoURL, quality, captions, func(progress downloadProgress) {
 					select {
 					case r.downloadProgresses <- progress:
 					default:
@@ -907,7 +928,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 						}
 					}
 				})
-				r.downloadResults <- downloadResult{path: path, err: err}
+				r.downloadResults <- downloadResult{path: path, warning: warning, err: err}
 			}()
 			guigui.RequestRebuild()
 		})
@@ -930,6 +951,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			style.SetWeightInRange(0, len(status), 600)
 		} else {
 			style.SetColorInRange(0, len(status), color.RGBA{R: 35, G: 120, B: 65, A: 255})
+			if r.downloadWarning != "" && strings.HasSuffix(status, r.downloadWarning) {
+				style.SetColorInRange(len(status)-len(r.downloadWarning), len(status), color.RGBA{R: 150, G: 100, B: 25, A: 255})
+			}
 		}
 		r.body.SetOverrideStyles(&style, false)
 	} else if r.showDVDWriting {
@@ -1154,6 +1178,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.about)
 	adder.AddWidget(&r.dvdWriteDialog)
 	adder.AddWidget(&r.dvdProgressDialog)
+	adder.AddWidget(&r.captionPicker)
 	adder.AddWidget(&r.title)
 	if r.showSettings {
 		adder.AddWidget(&r.settingsPage)
@@ -1181,6 +1206,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 				adder.AddWidget(&r.qualityLabel)
 				adder.AddWidget(&r.qualitySelect)
 				adder.AddWidget(&r.downloadButton)
+				r.addCaptionRows(adder)
 			} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
 				adder.AddWidget(&r.qualityStatus)
 			}
@@ -1193,7 +1219,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		if r.totalBytes > 0 && (r.downloadInFlight || (!r.downloadFailed && r.downloadDownloadedComplete())) {
 			adder.AddWidget(&r.downloadProgressText)
 		}
-		adder.AddWidget(&r.urlHint)
+		if !r.videoReadyToDownload() {
+			adder.AddWidget(&r.urlHint)
+		}
 	} else if r.showDVDWriting {
 		adder.AddWidget(&r.dvdVideoHeading)
 		adder.AddWidget(&r.dvdVideoList)
@@ -1597,8 +1625,8 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), timeout)
 		r.cancelQualityLookup = cancel
 		go func() {
-			title, thumbnail, qualities, err := videoDetails(ctx, settings, videoURL)
-			r.qualityLookupResults <- qualityLookupResult{requestID: requestID, videoURL: videoURL, title: title, thumbnail: thumbnail, qualities: qualities, err: err}
+			info, err := videoDetails(ctx, settings, videoURL)
+			r.qualityLookupResults <- qualityLookupResult{requestID: requestID, videoURL: videoURL, info: info, err: err}
 		}()
 		updated = true
 	}
@@ -1615,14 +1643,17 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 					r.cancelQualityLookup = nil
 				}
 				r.qualityLoading = false
-				if result.title != "" {
+				if result.info.title != "" {
 					r.confirmedVideoURL = result.videoURL
-					r.videoTitle.SetValue(result.title)
-					if result.thumbnail != nil {
-						r.thumbnail.SetImage(ebiten.NewImageFromImage(result.thumbnail))
+					r.videoTitle.SetValue(result.info.title)
+					if result.info.thumbnail != nil {
+						r.thumbnail.SetImage(ebiten.NewImageFromImage(result.info.thumbnail))
 					}
 				}
-				if result.err != nil || len(result.qualities) == 0 {
+				r.videoCaptions = result.info.captions
+				r.selectedCaptionID = ""
+				r.additionalCaptionIDs = nil
+				if result.err != nil || len(result.info.qualities) == 0 {
 					r.qualityOptions = nil
 					r.selectedQualityItag = 0
 					if result.err != nil {
@@ -1631,8 +1662,8 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 						r.qualityError = "取得できる画質がありません。"
 					}
 				} else {
-					r.qualityOptions = result.qualities
-					r.selectedQualityItag = result.qualities[0].itag
+					r.qualityOptions = result.info.qualities
+					r.selectedQualityItag = result.info.qualities[0].itag
 					r.qualityError = ""
 					r.confirmedVideoURL = result.videoURL
 				}
@@ -1660,6 +1691,10 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 			} else {
 				r.downloadFailed = false
 				r.downloadStatus = "ダウンロードが完了しました。\n保存先：" + result.path
+				r.downloadWarning = result.warning
+				if result.warning != "" {
+					r.downloadStatus += "\n" + result.warning
+				}
 			}
 			updated = true
 		default:
@@ -1764,6 +1799,197 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 	return nil
 }
 
+// additionalCaptionCandidates are the tracks that can be added besides the
+// default one.
+func (r *root) additionalCaptionCandidates() []captionTrack {
+	var tracks []captionTrack
+	for _, track := range r.videoCaptions.Tracks {
+		if track.ID != r.selectedCaptionID {
+			tracks = append(tracks, track)
+		}
+	}
+	return tracks
+}
+
+// chosenAdditionalCaptions are the additional tracks the user checked, in
+// the order of the track list. There are none without a default track.
+func (r *root) chosenAdditionalCaptions() []captionTrack {
+	if !r.showAdditionalCaptions() {
+		return nil
+	}
+	var tracks []captionTrack
+	for _, track := range r.additionalCaptionCandidates() {
+		if r.additionalCaptionIDs[track.ID] {
+			tracks = append(tracks, track)
+		}
+	}
+	return tracks
+}
+
+// showAdditionalCaptions reports whether the 追加の字幕 row is shown: only
+// when a default track is chosen, and another track is left to add beside
+// it.
+func (r *root) showAdditionalCaptions() bool {
+	if _, ok := r.videoCaptions.find(r.selectedCaptionID); !ok {
+		return false
+	}
+	return len(r.videoCaptions.Tracks) > 1
+}
+
+// buildCaptionRows sets up the 字幕 row, which picks the default track, and
+// the 追加の字幕 row, which picks any number of other tracks.
+func (r *root) buildCaptionRows(context *guigui.Context) {
+	gray := color.RGBA{R: 120, G: 120, B: 120, A: 255}
+	r.captionLabel.SetValue("字幕")
+	r.captionLabel.SetSelectable(false)
+	r.captionLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	tracks := r.videoCaptions.Tracks
+	if len(tracks) == 0 {
+		note := "この動画には字幕がありません"
+		r.captionNone.SetValue(note)
+		r.captionNone.SetSelectable(false)
+		r.captionNone.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+		var noteStyle basicwidget.TextStyles
+		noteStyle.SetColorInRange(0, len(note), gray)
+		r.captionNone.SetOverrideStyles(&noteStyle, false)
+		return
+	}
+	items := make([]basicwidget.SelectItem[string], 0, len(tracks)+1)
+	items = append(items, basicwidget.SelectItem[string]{Text: "なし", Value: ""})
+	for _, track := range tracks {
+		items = append(items, basicwidget.SelectItem[string]{Text: track.label(), Value: track.ID})
+	}
+	r.captionSelect.SetItems(items)
+	r.captionSelect.SelectItemByValue(r.selectedCaptionID)
+	r.captionSelect.OnItemSelected(func(_ *guigui.Context, index int) {
+		item, ok := r.captionSelect.ItemByIndex(index)
+		if !ok || item.Value == r.selectedCaptionID {
+			return
+		}
+		r.selectedCaptionID = item.Value
+		// The default track is not also an additional one.
+		delete(r.additionalCaptionIDs, item.Value)
+		guigui.RequestRebuild()
+	})
+	context.SetEnabled(&r.captionSelect, !r.downloadInFlight)
+
+	if !r.showAdditionalCaptions() {
+		return
+	}
+	r.additionalCaptionLabel.SetValue("追加の字幕")
+	r.additionalCaptionLabel.SetSelectable(false)
+	r.additionalCaptionLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	r.additionalCaptionButton.SetText("選択")
+	context.SetEnabled(&r.additionalCaptionButton, !r.downloadInFlight)
+	r.additionalCaptionButton.OnDown(func(_ *guigui.Context) {
+		if r.downloadInFlight {
+			return
+		}
+		r.captionPicker.SetOpen(true)
+		guigui.RequestRebuild()
+	})
+	summary := additionalCaptionsSummary(r.chosenAdditionalCaptions())
+	r.additionalCaptionText.SetValue(summary)
+	r.additionalCaptionText.SetSelectable(false)
+	r.additionalCaptionText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	var summaryStyle basicwidget.TextStyles
+	if summary == "なし" {
+		summaryStyle.SetColorInRange(0, len(summary), gray)
+	}
+	r.additionalCaptionText.SetOverrideStyles(&summaryStyle, false)
+}
+
+// buildCaptionPicker sets up the popup that picks the additional tracks.
+func (r *root) buildCaptionPicker() {
+	r.captionPicker.tracks = r.additionalCaptionCandidates()
+	r.captionPicker.selected = r.additionalCaptionIDs
+	r.captionPicker.onToggle = func(id string, on bool) {
+		if r.downloadInFlight {
+			return
+		}
+		if r.additionalCaptionIDs == nil {
+			r.additionalCaptionIDs = make(map[string]bool)
+		}
+		if on {
+			r.additionalCaptionIDs[id] = true
+		} else {
+			delete(r.additionalCaptionIDs, id)
+		}
+	}
+}
+
+// addCaptionRows adds the widgets of the caption rows that apply.
+func (r *root) addCaptionRows(adder *guigui.ChildAdder) {
+	adder.AddWidget(&r.captionLabel)
+	if len(r.videoCaptions.Tracks) == 0 {
+		adder.AddWidget(&r.captionNone)
+		return
+	}
+	adder.AddWidget(&r.captionSelect)
+	if r.showAdditionalCaptions() {
+		adder.AddWidget(&r.additionalCaptionLabel)
+		adder.AddWidget(&r.additionalCaptionButton)
+		adder.AddWidget(&r.additionalCaptionText)
+	}
+}
+
+// The rows below a video share a label column, so that their controls line
+// up; the download button sits at the right end, below 確認.
+func downloadRowColumns(context *guigui.Context, content image.Rectangle) (left, right int) {
+	u := basicwidget.UnitSize(context)
+	return content.Min.X + 4*u, content.Max.X - 5*u
+}
+
+// layoutQualityRow lays out the 画質 row and the download button at top.
+func (r *root) layoutQualityRow(context *guigui.Context, layouter *guigui.ChildLayouter, content image.Rectangle, top int) {
+	u := basicwidget.UnitSize(context)
+	left, right := downloadRowColumns(context, content)
+	layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, top, left, top+u))
+	layouter.LayoutWidget(&r.qualitySelect, image.Rect(left, top, right, top+u))
+	layouter.LayoutWidget(&r.downloadButton, image.Rect(content.Max.X-4*u, top, content.Max.X, top+u))
+}
+
+// layoutCaptionRows lays out the caption rows from top and returns the top
+// of the last one.
+func (r *root) layoutCaptionRows(context *guigui.Context, layouter *guigui.ChildLayouter, content image.Rectangle, top int) int {
+	u := basicwidget.UnitSize(context)
+	left, right := downloadRowColumns(context, content)
+	layouter.LayoutWidget(&r.captionLabel, image.Rect(content.Min.X, top, left, top+u))
+	if len(r.videoCaptions.Tracks) == 0 {
+		layouter.LayoutWidget(&r.captionNone, image.Rect(left, top, content.Max.X, top+u))
+		return top
+	}
+	layouter.LayoutWidget(&r.captionSelect, image.Rect(left, top, right, top+u))
+	if !r.showAdditionalCaptions() {
+		return top
+	}
+	top += 5 * u / 4
+	layouter.LayoutWidget(&r.additionalCaptionLabel, image.Rect(content.Min.X, top, left, top+u))
+	buttonWidth := 3 * u
+	layouter.LayoutWidget(&r.additionalCaptionButton, image.Rect(left, top, left+buttonWidth, top+u))
+	layouter.LayoutWidget(&r.additionalCaptionText, image.Rect(left+buttonWidth+u/2, top, content.Max.X, top+u))
+	return top
+}
+
+// chosenCaptions returns the caption tracks to embed: the default one first,
+// then the additional ones.
+func (r *root) chosenCaptions() []requestedCaption {
+	var captions []requestedCaption
+	if track, ok := r.videoCaptions.find(r.selectedCaptionID); ok {
+		captions = append(captions, requestedCaption{Track: track, Default: true})
+	}
+	for _, track := range r.chosenAdditionalCaptions() {
+		captions = append(captions, requestedCaption{Track: track})
+	}
+	return captions
+}
+
+// videoReadyToDownload reports whether the download page shows a confirmed
+// video with qualities to choose from.
+func (r *root) videoReadyToDownload() bool {
+	return r.urlErrorMessage == "" && r.confirmedVideoURL != "" && r.confirmedVideoURL == strings.TrimSpace(r.urlInput.Value()) && len(r.qualityOptions) > 0
+}
+
 func (r *root) selectedDownloadQuality() (downloadQuality, bool) {
 	for _, quality := range r.qualityOptions {
 		if quality.itag == r.selectedQualityItag {
@@ -1783,6 +2009,9 @@ func (r *root) queueQualityLookup(videoURL string) {
 	r.qualityLookupAt = time.Time{}
 	r.qualityOptions = nil
 	r.selectedQualityItag = 0
+	r.videoCaptions = videoCaptions{}
+	r.selectedCaptionID = ""
+	r.additionalCaptionIDs = nil
 	r.confirmedVideoURL = ""
 	r.videoTitle.SetValue("")
 	r.thumbnail.SetImage(nil)
@@ -1803,12 +2032,16 @@ func (r *root) clearConfirmedVideo() {
 	}
 	if !r.downloadInFlight {
 		r.downloadStatus = ""
+		r.downloadWarning = ""
 		r.downloadFailed = false
 		r.downloadedBytes = 0
 		r.totalBytes = 0
 	}
 	r.qualityOptions = nil
 	r.selectedQualityItag = 0
+	r.videoCaptions = videoCaptions{}
+	r.selectedCaptionID = ""
+	r.additionalCaptionIDs = nil
 	r.confirmedVideoURL = ""
 	r.qualityError = ""
 	r.qualityLoading = false
@@ -1854,6 +2087,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.background, b)
 	layouter.LayoutWidget(&r.dvdWriteDialog, b)
 	layouter.LayoutWidget(&r.dvdProgressDialog, b)
+	layouter.LayoutWidget(&r.captionPicker, b)
 	sidebarWidth := 9 * u
 	layouter.LayoutWidget(&r.sidebar, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Max.Y))
 	layouter.LayoutWidget(&r.home, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Min.Y+2*u))
@@ -1930,13 +2164,19 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 			layouter.LayoutWidget(&r.confirmButton, image.Rect(content.Max.X-4*u, content.Min.Y+2*u, content.Max.X, content.Min.Y+3*u))
 			// The notice is a two-line footnote below the hint.
 			noticeTop := content.Max.Y - 5*u/4
-			hintTop := noticeTop - 3*u
-			layouter.LayoutWidget(&r.urlHint, image.Rect(content.Min.X, hintTop, content.Max.X, noticeTop))
+			hintTop := noticeTop
+			// The hint gives its room to the video once one is shown.
+			if !r.videoReadyToDownload() {
+				hintTop = noticeTop - 3*u
+				layouter.LayoutWidget(&r.urlHint, image.Rect(content.Min.X, hintTop, content.Max.X, noticeTop))
+			}
 			layouter.LayoutWidget(&r.urlNotice, image.Rect(content.Min.X, noticeTop, content.Max.X, content.Max.Y))
 			if r.urlErrorMessage != "" {
 				layouter.LayoutWidget(&r.urlError, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
 			}
 			buttonTop := content.Min.Y + 5*u
+			// progressBase is the top of the last row above the progress.
+			progressBase := buttonTop
 			if r.confirmedVideoURL == strings.TrimSpace(r.urlInput.Value()) {
 				r.videoTitle.SetWrapMode(basicwidget.WrapModeNormal)
 				r.videoTitle.SetMultiline(true)
@@ -1950,8 +2190,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					layouter.LayoutWidget(&r.videoTitle, image.Rect(content.Min.X+8*u, previewTop, content.Max.X, previewBottom))
 					qualityTop := content.Min.Y + 9*u
 					if len(r.qualityOptions) > 0 {
-						layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, qualityTop, content.Min.X+2*u, qualityTop+u))
-						layouter.LayoutWidget(&r.qualitySelect, image.Rect(content.Min.X+2*u, qualityTop, content.Min.X+9*u, qualityTop+u))
+						r.layoutQualityRow(context, layouter, content, qualityTop)
 					} else if qualityStatusVisible {
 						layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, qualityTop, content.Max.X, qualityTop+u))
 					}
@@ -1965,30 +2204,30 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					layouter.LayoutWidget(&r.videoTitle, image.Rect(content.Min.X, titleTop, content.Max.X, titleBottom))
 					qualityTop := titleBottom + u/2
 					if len(r.qualityOptions) > 0 {
-						layouter.LayoutWidget(&r.qualityLabel, image.Rect(content.Min.X, qualityTop, content.Min.X+2*u, qualityTop+u))
-						layouter.LayoutWidget(&r.qualitySelect, image.Rect(content.Min.X+2*u, qualityTop, content.Min.X+8*u, qualityTop+u))
+						r.layoutQualityRow(context, layouter, content, qualityTop)
 					} else if qualityStatusVisible {
 						layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, qualityTop, content.Max.X, qualityTop+u))
 					}
 					buttonTop = qualityTop
 				}
 				if len(r.qualityOptions) > 0 {
-					layouter.LayoutWidget(&r.downloadButton, image.Rect(content.Min.X+10*u, buttonTop, content.Min.X+14*u, buttonTop+u))
+					progressBase = r.layoutCaptionRows(context, layouter, content, buttonTop+5*u/4)
 				}
 			} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
 				layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
 			}
+			progressBase = max(progressBase, buttonTop)
 			if r.totalBytes > 0 && r.downloadInFlight {
-				layouter.LayoutWidget(&r.downloadProgressBar, image.Rect(content.Min.X, buttonTop+u, content.Max.X, buttonTop+u+u/2))
+				layouter.LayoutWidget(&r.downloadProgressBar, image.Rect(content.Min.X, progressBase+u, content.Max.X, progressBase+u+u/2))
 			}
 			if r.totalBytes > 0 && (r.downloadInFlight || (!r.downloadFailed && r.downloadDownloadedComplete())) {
-				progressTextTop := buttonTop + u
+				progressTextTop := progressBase + u
 				if r.downloadInFlight {
 					progressTextTop += u / 2
 				}
 				layouter.LayoutWidget(&r.downloadProgressText, image.Rect(content.Min.X, progressTextTop, content.Max.X, progressTextTop+u))
 			}
-			bodyTop := buttonTop + 3*u
+			bodyTop := progressBase + 3*u
 			if bodyTop < hintTop {
 				layouter.LayoutWidget(&r.body, image.Rect(content.Min.X, bodyTop, content.Max.X, hintTop))
 			}

@@ -1,3 +1,6 @@
 [files]
 extend-exclude = ["go.mod", "go.sum", "skill/"]
 [default.extend-words]
+# ISO 639-2 bibliographic language codes (French, Welsh).
+fre = "fre"
+wel = "wel"

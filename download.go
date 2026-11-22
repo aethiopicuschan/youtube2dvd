@@ -35,21 +35,24 @@ func withYouTubeClient(info youtube.ClientInfo, action func() error) error {
 	return action()
 }
 
-func downloadYouTubeVideo(ctx context.Context, videoURL string, quality downloadQuality, onProgress func(downloadProgress)) (string, error) {
-	var outputPath string
+// downloadYouTubeVideo downloads quality of the video and embeds the
+// requested caption tracks. It returns the saved path and, when captions
+// could not be added, a warning: the video is saved without them.
+func downloadYouTubeVideo(ctx context.Context, videoURL string, quality downloadQuality, captions []requestedCaption, onProgress func(downloadProgress)) (string, string, error) {
+	var outputPath, warning string
 	err := withYouTubeClient(youtube.AndroidClient, func() error {
 		var err error
-		outputPath, err = downloadYouTubeVideoWithCurrentClient(ctx, videoURL, quality, onProgress)
+		outputPath, warning, err = downloadYouTubeVideoWithCurrentClient(ctx, videoURL, quality, captions, onProgress)
 		return err
 	})
-	return outputPath, err
+	return outputPath, warning, err
 }
 
-func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string, quality downloadQuality, onProgress func(downloadProgress)) (string, error) {
+func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string, quality downloadQuality, captions []requestedCaption, onProgress func(downloadProgress)) (string, string, error) {
 	client := youtube.Client{}
 	video, err := client.GetVideoContext(ctx, videoURL)
 	if err != nil {
-		return "", fmt.Errorf("動画情報を取得できませんでした: %w", err)
+		return "", "", fmt.Errorf("動画情報を取得できませんでした: %w", err)
 	}
 	var format *youtube.Format
 	for i := range video.Formats {
@@ -59,7 +62,7 @@ func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string,
 		}
 	}
 	if format == nil {
-		return "", fmt.Errorf("選択した画質は現在利用できません。画質を選び直してください")
+		return "", "", fmt.Errorf("選択した画質は現在利用できません。画質を選び直してください")
 	}
 	ext := quality.extension
 	if ext == "" {
@@ -68,31 +71,41 @@ func downloadYouTubeVideoWithCurrentClient(ctx context.Context, videoURL string,
 
 	directory, err := downloadDirectory()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return "", fmt.Errorf("ダウンロードフォルダを作成できません: %w", err)
+		return "", "", fmt.Errorf("ダウンロードフォルダを作成できません: %w", err)
 	}
 	name := safeDownloadName(video.Title) + ext
 	outputPath := uniqueDownloadPath(directory, name)
 
-	tmp, err := os.CreateTemp(directory, ".youtube-download-*.part")
+	// The extension tells the subtitle step which container it holds.
+	tmp, err := os.CreateTemp(directory, ".youtube-download-*.part"+ext)
 	if err != nil {
-		return "", fmt.Errorf("一時ファイルを作成できません: %w", err)
+		return "", "", fmt.Errorf("一時ファイルを作成できません: %w", err)
 	}
 	tmpPath := tmp.Name()
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("一時ファイルを閉じられません: %w", err)
+		return "", "", fmt.Errorf("一時ファイルを閉じられません: %w", err)
 	}
 	defer os.Remove(tmpPath)
 	if err := downloadFormatToPath(ctx, client, video, format, tmpPath, onProgress); err != nil {
-		return "", err
+		return "", "", err
+	}
+	var warning string
+	if len(captions) > 0 {
+		warning = addCaptions(ctx, tmpPath, captions, func(track captionTrack) ([]byte, error) {
+			return fetchBuiltinCaptionVTT(ctx, video, track.ID)
+		})
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
 	}
 	if err := os.Rename(tmpPath, outputPath); err != nil {
-		return "", fmt.Errorf("保存先へ移動できません: %w", err)
+		return "", "", fmt.Errorf("保存先へ移動できません: %w", err)
 	}
-	return outputPath, nil
+	return outputPath, warning, nil
 }
 
 func downloadableFormats(formats youtube.FormatList) youtube.FormatList {
@@ -189,16 +202,22 @@ type downloadQuality struct {
 	audioSize        int64
 }
 
-type qualityLookupResult struct {
-	requestID uint64
-	videoURL  string
+// videoInfo is what the app shows about a video before downloading it.
+type videoInfo struct {
 	title     string
 	thumbnail image.Image
 	qualities []downloadQuality
+	captions  videoCaptions
+}
+
+type qualityLookupResult struct {
+	requestID uint64
+	videoURL  string
+	info      videoInfo
 	err       error
 }
 
-func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Image, []downloadQuality, error) {
+func getYouTubeDetails(ctx context.Context, videoURL string) (videoInfo, error) {
 	var video *youtube.Video
 	err := withYouTubeClient(youtube.AndroidClient, func() error {
 		client := youtube.Client{}
@@ -207,7 +226,7 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 		return err
 	})
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("動画情報を取得できませんでした: %w", err)
+		return videoInfo{}, fmt.Errorf("動画情報を取得できませんでした: %w", err)
 	}
 	var thumbnail image.Image
 	if len(video.Thumbnails) > 0 {
@@ -255,10 +274,12 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (string, image.Imag
 		}
 		return qualities[i].extension < qualities[j].extension
 	})
+	info := videoInfo{title: video.Title, thumbnail: thumbnail, captions: builtinCaptions(video.CaptionTracks)}
 	if len(qualities) == 0 {
-		return video.Title, thumbnail, nil, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
+		return info, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
 	}
-	return video.Title, thumbnail, qualities, nil
+	info.qualities = qualities
+	return info, nil
 }
 
 // fetchThumbnail downloads and decodes a thumbnail. It returns nil when the

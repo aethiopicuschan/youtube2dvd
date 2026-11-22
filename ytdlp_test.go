@@ -231,10 +231,26 @@ type fakeYtDlp struct {
 	failErr    error
 	// skipOutput makes downloads succeed without writing a file.
 	skipOutput bool
+	// captions is written by a subtitle-only run, as yt-dlp names it;
+	// nil writes nothing, as yt-dlp does when the track is missing.
+	captions []byte
 }
 
 func (f *fakeYtDlp) Run(_ context.Context, args []string, onLine func(string)) ([]byte, error) {
 	f.calls = append(f.calls, slices.Clone(args))
+	if slices.Contains(args, "--skip-download") {
+		if f.captions == nil {
+			return nil, nil
+		}
+		base := strings.ReplaceAll(args[slices.Index(args, "-o")+1], "%%", "%")
+		keys := strings.TrimSuffix(strings.TrimPrefix(args[slices.Index(args, "--sub-langs")+1], "^("), ")$")
+		for key := range strings.SplitSeq(strings.ReplaceAll(keys, `\`, ""), "|") {
+			if err := os.WriteFile(base+"."+key+".vtt", f.captions, 0o600); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
 	format := args[slices.Index(args, "-f")+1]
 	output := strings.ReplaceAll(args[slices.Index(args, "-o")+1], "%%", "%")
 	if format == f.failFormat {
@@ -296,7 +312,7 @@ func TestDownloadWithYtDlpProgressive(t *testing.T) {
 	quality := downloadQuality{title: `テスト: 動画/01`, extension: ".mp4", ytDlpFormat: "18", videoSize: 2000}
 	var progresses []downloadProgress
 
-	path, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, failingMux(t), func(progress downloadProgress) {
+	path, _, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, failingMux(t), func(progress downloadProgress) {
 		progresses = append(progresses, progress)
 	})
 	if err != nil {
@@ -335,7 +351,7 @@ func TestDownloadWithYtDlpCombinesStreams(t *testing.T) {
 		return os.WriteFile(outputPath, []byte("combined"), 0o600)
 	}
 
-	path, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, mux, func(progress downloadProgress) {
+	path, _, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, mux, func(progress downloadProgress) {
 		progresses = append(progresses, progress)
 	})
 	if err != nil {
@@ -437,7 +453,7 @@ func TestDownloadWithYtDlpFailuresLeaveNoFiles(t *testing.T) {
 			if mux == nil {
 				mux = func(context.Context, string, string, string) error { return nil }
 			}
-			path, err := downloadWithYtDlp(context.Background(), test.runner, directory, testVideoURL, test.quality, mux, nil)
+			path, _, err := downloadWithYtDlp(context.Background(), test.runner, directory, testVideoURL, test.quality, nil, mux, nil)
 			if err == nil {
 				t.Fatalf("download succeeded with %q, want an error", path)
 			}

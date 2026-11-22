@@ -196,10 +196,12 @@ func ytDlpVersion(ctx context.Context, runner ytDlpRunner) (string, error) {
 
 // ytDlpInfo is the part of "yt-dlp -J" output that the app reads.
 type ytDlpInfo struct {
-	Title      string            `json:"title"`
-	Thumbnail  string            `json:"thumbnail"`
-	Thumbnails []ytDlpThumbnail  `json:"thumbnails"`
-	Formats    []ytDlpFormatInfo `json:"formats"`
+	Title             string                     `json:"title"`
+	Thumbnail         string                     `json:"thumbnail"`
+	Thumbnails        []ytDlpThumbnail           `json:"thumbnails"`
+	Formats           []ytDlpFormatInfo          `json:"formats"`
+	Subtitles         map[string][]ytDlpSubtitle `json:"subtitles"`
+	AutomaticCaptions map[string][]ytDlpSubtitle `json:"automatic_captions"`
 }
 
 type ytDlpThumbnail struct {
@@ -359,24 +361,26 @@ func ytDlpThumbnailURL(info ytDlpInfo) string {
 	return best
 }
 
-func getYtDlpDetails(ctx context.Context, runner ytDlpRunner, videoURL string) (string, image.Image, []downloadQuality, error) {
+func getYtDlpDetails(ctx context.Context, runner ytDlpRunner, videoURL string) (videoInfo, error) {
 	output, err := runner.Run(ctx, ytDlpInfoArgs(videoURL), nil)
 	if err != nil {
-		return "", nil, nil, err
+		return videoInfo{}, err
 	}
 	info, err := parseYtDlpInfo(output)
 	if err != nil {
-		return "", nil, nil, err
+		return videoInfo{}, err
 	}
 	var thumbnail image.Image
 	if url := ytDlpThumbnailURL(info); url != "" {
 		thumbnail = fetchThumbnail(ctx, url)
 	}
+	details := videoInfo{title: info.Title, thumbnail: thumbnail, captions: ytDlpCaptions(info.Subtitles, info.AutomaticCaptions)}
 	qualities := ytDlpQualities(info)
 	if len(qualities) == 0 {
-		return info.Title, thumbnail, nil, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
+		return details, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
 	}
-	return info.Title, thumbnail, qualities, nil
+	details.qualities = qualities
+	return details, nil
 }
 
 // parseYtDlpProgress reads one line written for ytDlpProgressTemplate. Other
@@ -412,19 +416,21 @@ func parseYtDlpProgress(line string) (downloadProgress, bool) {
 // streamMuxer combines separately downloaded video and audio into outputPath.
 type streamMuxer func(ctx context.Context, videoPath, audioPath, outputPath string) error
 
-// downloadWithYtDlp downloads quality of the video into directory and returns
-// the path of the saved file. Everything is first written to a temporary
-// directory inside directory, which is removed however the download ends.
-func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, videoURL string, quality downloadQuality, mux streamMuxer, onProgress func(downloadProgress)) (string, error) {
+// downloadWithYtDlp downloads quality of the video into directory and
+// embeds the requested caption tracks. It returns the path of the saved file
+// and, when captions could not be added, a warning: the video is saved
+// without them. Everything is first written to a temporary directory inside
+// directory, which is removed however the download ends.
+func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, videoURL string, quality downloadQuality, captions []requestedCaption, mux streamMuxer, onProgress func(downloadProgress)) (string, string, error) {
 	if quality.ytDlpFormat == "" {
-		return "", fmt.Errorf("選択した画質は現在利用できません。画質を選び直してください")
+		return "", "", fmt.Errorf("選択した画質は現在利用できません。画質を選び直してください")
 	}
 	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return "", fmt.Errorf("ダウンロードフォルダを作成できません: %w", err)
+		return "", "", fmt.Errorf("ダウンロードフォルダを作成できません: %w", err)
 	}
 	workDir, err := os.MkdirTemp(directory, ".youtube2dvd-ytdlp-")
 	if err != nil {
-		return "", fmt.Errorf("一時フォルダを作成できません: %w", err)
+		return "", "", fmt.Errorf("一時フォルダを作成できません: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
@@ -459,7 +465,7 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 	if quality.ytDlpAudioFormat == "" {
 		downloadedPath, _, err = fetch(quality.ytDlpFormat, "video"+quality.extension, 0, 0)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 	} else {
 		// Report both streams as one download. Without both sizes each
@@ -470,7 +476,7 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 		}
 		videoPath, videoSize, err := fetch(quality.ytDlpFormat, "video.webm", 0, total)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		var audioOffset int64
 		if total > 0 {
@@ -478,7 +484,7 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 		}
 		audioPath, audioSize, err := fetch(quality.ytDlpAudioFormat, "audio.webm", audioOffset, total)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if onProgress != nil {
 			onProgress(downloadProgress{downloaded: videoSize + audioSize, total: videoSize + audioSize})
@@ -486,43 +492,56 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 		downloadedPath = filepath.Join(workDir, "combined.webm")
 		if err := mux(ctx, videoPath, audioPath, downloadedPath); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return "", ctxErr
+				return "", "", ctxErr
 			}
-			return "", fmt.Errorf("動画と音声を結合できませんでした: %w", err)
+			return "", "", fmt.Errorf("動画と音声を結合できませんでした: %w", err)
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", "", err
+	}
+
+	var warning string
+	if len(captions) > 0 {
+		tracks := make([]captionTrack, 0, len(captions))
+		for _, caption := range captions {
+			tracks = append(tracks, caption.Track)
+		}
+		warning = addCaptions(ctx, downloadedPath, captions, fetchYtDlpCaptions(ctx, runner, workDir, tracks, videoURL))
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
 	}
 
 	outputPath := uniqueDownloadPath(directory, safeDownloadName(quality.title)+quality.extension)
 	if err := os.Rename(downloadedPath, outputPath); err != nil {
-		return "", fmt.Errorf("保存先へ移動できません: %w", err)
+		return "", "", fmt.Errorf("保存先へ移動できません: %w", err)
 	}
-	return outputPath, nil
+	return outputPath, warning, nil
 }
 
 // videoDetails looks up a video with the downloader chosen in settings. When
 // yt-dlp is chosen and cannot run, the lookup fails; it does not fall back to
 // the built-in downloader.
-func videoDetails(ctx context.Context, settings appSettings, videoURL string) (string, image.Image, []downloadQuality, error) {
+func videoDetails(ctx context.Context, settings appSettings, videoURL string) (videoInfo, error) {
 	if settings.UseYtDlp {
 		return getYtDlpDetails(ctx, execYtDlpRunner{path: settings.YtDlpPath}, videoURL)
 	}
 	return getYouTubeDetails(ctx, videoURL)
 }
 
-// downloadVideo downloads quality with the downloader that listed it.
-func downloadVideo(ctx context.Context, settings appSettings, videoURL string, quality downloadQuality, onProgress func(downloadProgress)) (string, error) {
+// downloadVideo downloads quality and the requested captions with the
+// downloader that listed them. See downloadWithYtDlp for the results.
+func downloadVideo(ctx context.Context, settings appSettings, videoURL string, quality downloadQuality, captions []requestedCaption, onProgress func(downloadProgress)) (string, string, error) {
 	if quality.ytDlpFormat == "" {
-		return downloadYouTubeVideo(ctx, videoURL, quality, onProgress)
+		return downloadYouTubeVideo(ctx, videoURL, quality, captions, onProgress)
 	}
 	directory, err := downloadDirectory()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	mux := func(ctx context.Context, videoPath, audioPath, outputPath string) error {
 		return muxDownloadedStreams(ctx, videoPath, audioPath, outputPath, ".webm", "video/webm")
 	}
-	return downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, mux, onProgress)
+	return downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, captions, mux, onProgress)
 }
