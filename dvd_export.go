@@ -157,9 +157,9 @@ func (e *dvdExportEncoder) report(message string, convertedBytes int64) {
 		return
 	}
 	if e.estimate > 0 {
-		message = fmt.Sprintf("%s（変換済み %s / ISO概算 %s）", message, formatBytes(convertedBytes), formatBytes(e.estimate))
+		message = fmt.Sprintf("%s\n変換済み %s / ISO概算 %s", message, formatBytes(convertedBytes), formatBytes(e.estimate))
 	} else {
-		message = fmt.Sprintf("%s（変換済み %s / ISO概算を計算できません）", message, formatBytes(convertedBytes))
+		message = fmt.Sprintf("%s\n変換済み %s / ISO概算を計算できません", message, formatBytes(convertedBytes))
 	}
 	e.progress(dvdExportProgressUpdate{
 		message:        message,

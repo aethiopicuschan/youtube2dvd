@@ -114,7 +114,7 @@ func (c *dvdProgressDialogContent) statusText() {
 func (c *dvdProgressDialogContent) Measure(context *guigui.Context, _ guigui.Constraints) image.Point {
 	u := basicwidget.UnitSize(context)
 	app := context.AppBounds()
-	return image.Pt(max(1, min(20*u, app.Dx()-2*u)), max(1, min(7*u, app.Dy()-2*u)))
+	return image.Pt(max(1, min(20*u, app.Dx()-2*u)), max(1, min(8*u, app.Dy()-2*u)))
 }
 
 func (c *dvdProgressDialogContent) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
@@ -127,9 +127,11 @@ func (c *dvdProgressDialogContent) Layout(context *guigui.Context, bounds *guigu
 	layouter.LayoutWidget(&c.heading, image.Rect(x, headingTop, x+width, headingTop+u))
 
 	statusTop := headingTop + u + u/3
-	layouter.LayoutWidget(&c.status, image.Rect(x, statusTop, x+width, statusTop+u))
+	// The status has a second line for the converted size during conversion.
+	statusHeight := 2 * basicwidget.LineHeight(context)
+	layouter.LayoutWidget(&c.status, image.Rect(x, statusTop, x+width, statusTop+statusHeight))
 
-	progressTop := statusTop + u + u/2
+	progressTop := statusTop + statusHeight + u/2
 	layouter.LayoutWidget(&c.progress, image.Rect(x, progressTop, x+width, progressTop+u/2))
 	detailsTop := progressTop + u/2
 	layouter.LayoutWidget(&c.percent, image.Rect(x, detailsTop, x+6*u, detailsTop+u))
