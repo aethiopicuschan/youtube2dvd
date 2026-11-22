@@ -379,7 +379,7 @@ func embedWebMSubtitles(ctx context.Context, srcPath, dstPath string, subtitleTr
 	var cueBlocks []mkv.Block
 	for i, track := range subtitleTracks {
 		id := lastID + uint64(i) + 1
-		tracks = append(tracks, mkv.Track{
+		entry := mkv.Track{
 			ID:             id,
 			UID:            id,
 			Type:           mkv.SubtitleTrack,
@@ -389,7 +389,16 @@ func embedWebMSubtitles(ctx context.Context, srcPath, dstPath string, subtitleTr
 			Name:           track.Name,
 			IsDefault:      track.Default,
 			DefaultPresent: true,
-		})
+		}
+		if track.Default {
+			// mkvgo writes FlagDefault only as 0, leaving a default track
+			// without the element. video2dvd does not count such an implied
+			// mark when no other subtitle track has FlagDefault 0, so a
+			// single default track would start hidden on the DVD; the
+			// element is written here as a kept child instead.
+			entry.Unmodeled = append(entry.Unmodeled, mkv.RawElement{Parent: mkv.IDTrackEntry, ID: mkv.IDFlagDefault, Data: []byte{1}})
+		}
+		tracks = append(tracks, entry)
 		cueBlocks = append(cueBlocks, webVTTBlocks(id, track.Cues)...)
 	}
 	withSubtitles := *container
