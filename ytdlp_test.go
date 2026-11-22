@@ -507,3 +507,27 @@ func TestYtDlpCandidatePaths(t *testing.T) {
 		t.Errorf("windows candidates = %q, want the WinGet links folder among them", windows)
 	}
 }
+
+func TestYtDlpDialogDirectory(t *testing.T) {
+	home := func() (string, error) { return "/home/user", nil }
+	env := func(name string) string {
+		return map[string]string{"LOCALAPPDATA": `C:\Users\user\AppData\Local`}[name]
+	}
+	existing := func(paths ...string) func(string) bool {
+		return func(path string) bool { return slices.Contains(paths, path) }
+	}
+
+	if got := ytDlpDialogDirectory("darwin", env, home, existing("/usr/local/bin", "/home/user/Downloads")); got != "/usr/local/bin" {
+		t.Errorf("darwin with /usr/local/bin = %q", got)
+	}
+	if got := ytDlpDialogDirectory("darwin", env, home, existing("/home/user/Downloads")); got != "/home/user/Downloads" {
+		t.Errorf("darwin without install folders = %q, want Downloads", got)
+	}
+	if got := ytDlpDialogDirectory("linux", env, home, existing()); got != "/home/user" {
+		t.Errorf("without any folder = %q, want the home folder", got)
+	}
+	noHome := func() (string, error) { return "", os.ErrNotExist }
+	if got := ytDlpDialogDirectory("linux", env, noHome, existing()); got != "" {
+		t.Errorf("without a home folder = %q, want none", got)
+	}
+}

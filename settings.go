@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+
+	"github.com/ncruces/zenity"
 )
 
 // appSettings holds the choices the user made on the settings page.
@@ -110,4 +113,46 @@ func ytDlpCandidatePaths(goos string, getenv func(string) string, homeDir func()
 		}
 	}
 	return candidates
+}
+
+// chooseYtDlpPath asks the user for the yt-dlp executable with a file
+// dialog. It returns zenity.ErrCanceled when the user closes the dialog.
+func chooseYtDlpPath() (string, error) {
+	options := []zenity.Option{zenity.Title("yt-dlp の実行ファイルを選択")}
+	if directory := ytDlpDialogDirectory(runtime.GOOS, os.Getenv, os.UserHomeDir, isDirectory); directory != "" {
+		// A trailing separator makes it the folder the dialog opens in.
+		options = append(options, zenity.Filename(directory+string(filepath.Separator)))
+	}
+	if runtime.GOOS == "windows" {
+		options = append(options, zenity.FileFilters{{Name: "実行ファイル (*.exe)", Patterns: []string{"*.exe"}, CaseFold: true}})
+	}
+	path, err := zenity.SelectFile(options...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(path), nil
+}
+
+// ytDlpDialogDirectory returns the folder to open the file dialog in: the
+// first usual install location of yt-dlp that exists, or else the Downloads
+// folder, where a downloaded yt-dlp executable is often left.
+func ytDlpDialogDirectory(goos string, getenv func(string) string, homeDir func() (string, error), exists func(string) bool) string {
+	for _, candidate := range ytDlpCandidatePaths(goos, getenv, homeDir) {
+		if directory := filepath.Dir(candidate); exists(directory) {
+			return directory
+		}
+	}
+	home, err := homeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	if downloads := filepath.Join(home, "Downloads"); exists(downloads) {
+		return downloads
+	}
+	return home
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

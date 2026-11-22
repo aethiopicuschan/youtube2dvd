@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
+	"github.com/ncruces/zenity"
 )
 
 type ytDlpCheckResult struct {
@@ -55,6 +57,23 @@ func (p *settingsPage) changed() {
 		}
 	}
 	guigui.RequestRebuild()
+}
+
+// selectYtDlp lets the user pick the yt-dlp executable and stores its path.
+func (p *settingsPage) selectYtDlp() {
+	path, err := chooseYtDlpPath()
+	if errors.Is(err, zenity.ErrCanceled) {
+		return
+	}
+	if err != nil || path == "" {
+		p.resetCheck()
+		p.statusMessage = "yt-dlp の実行ファイルを選択できませんでした。"
+		p.statusFailed = true
+		guigui.RequestRebuild()
+		return
+	}
+	p.settings.YtDlpPath = path
+	p.changed()
 }
 
 func (p *settingsPage) resetCheck() {
@@ -126,7 +145,7 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 	p.pathLabel.SetSelectable(false)
 	p.pathLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	p.pathInput.SetValue(p.settings.YtDlpPath)
-	p.pathInput.SetPlaceholder("yt-dlp が見つかりません。パスを入力してください")
+	p.pathInput.SetPlaceholder("yt-dlp が見つかりません。パスを入力するか「選択」で探してください")
 	context.SetEnabled(&p.pathInput, !p.busy)
 	p.pathInput.OnValueChanged(func(_ *guigui.Context, text string, _ bool) {
 		path := strings.TrimSpace(text)
@@ -137,10 +156,22 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 		p.changed()
 	})
 
-	p.checkButton.SetText("確認")
-	context.SetEnabled(&p.checkButton, !p.checking && p.settings.YtDlpPath != "")
+	// Without a path the button finds the executable instead of checking it.
+	if p.settings.YtDlpPath == "" {
+		p.checkButton.SetText("選択")
+		context.SetEnabled(&p.checkButton, !p.busy)
+	} else {
+		p.checkButton.SetText("確認")
+		context.SetEnabled(&p.checkButton, !p.checking)
+	}
 	p.checkButton.OnDown(func(_ *guigui.Context) {
-		if p.checking || p.settings.YtDlpPath == "" {
+		if p.settings.YtDlpPath == "" {
+			if !p.busy {
+				p.selectYtDlp()
+			}
+			return
+		}
+		if p.checking {
 			return
 		}
 		p.startCheck()
