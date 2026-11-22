@@ -317,6 +317,26 @@ func (r *root) downloadDownloadedComplete() bool {
 	return r.totalBytes > 0 && r.downloadedBytes >= r.totalBytes
 }
 
+// showDownloadProgressText reports whether the progress text is shown: from
+// the moment a download starts, and after a download that completed.
+func (r *root) showDownloadProgressText() bool {
+	return r.downloadInFlight || (!r.downloadFailed && r.downloadDownloadedComplete())
+}
+
+// downloadProgressLabel describes the progress of the download. Until the
+// size is known, which takes a moment after the download starts, it shows
+// what has arrived so far.
+func (r *root) downloadProgressLabel() string {
+	if r.totalBytes > 0 {
+		percent := r.downloadedBytes * 100 / r.totalBytes
+		return fmt.Sprintf("%d%%  (%s / %s)", percent, formatBytes(r.downloadedBytes), formatBytes(r.totalBytes))
+	}
+	if r.downloadedBytes > 0 {
+		return formatBytes(r.downloadedBytes)
+	}
+	return "0%"
+}
+
 func formatBytes(size int64) string {
 	const unit = 1024
 	if size < unit {
@@ -896,10 +916,8 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			r.downloadProgressBar.SetMaximumValueInt64(1)
 			r.downloadProgressBar.SetValueInt64(0)
 		}
-		showProgress := r.totalBytes > 0 && (r.downloadInFlight || (!r.downloadFailed && r.downloadDownloadedComplete()))
-		if showProgress {
-			percent := r.downloadedBytes * 100 / r.totalBytes
-			r.downloadProgressText.SetValue(fmt.Sprintf("%d%%  (%s / %s)", percent, formatBytes(r.downloadedBytes), formatBytes(r.totalBytes)))
+		if r.showDownloadProgressText() {
+			r.downloadProgressText.SetValue(r.downloadProgressLabel())
 			r.downloadProgressText.SetHorizontalAlign(basicwidget.HorizontalAlignStart)
 			r.downloadProgressText.SetSelectable(false)
 		}
@@ -1219,10 +1237,10 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
 			adder.AddWidget(&r.qualityStatus)
 		}
-		if r.totalBytes > 0 && r.downloadInFlight {
+		if r.downloadInFlight {
 			adder.AddWidget(&r.downloadProgressBar)
 		}
-		if r.totalBytes > 0 && (r.downloadInFlight || (!r.downloadFailed && r.downloadDownloadedComplete())) {
+		if r.showDownloadProgressText() {
 			adder.AddWidget(&r.downloadProgressText)
 		}
 		if !r.videoReadyToDownload() {
@@ -2223,10 +2241,10 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 				layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
 			}
 			progressBase = max(progressBase, buttonTop)
-			if r.totalBytes > 0 && r.downloadInFlight {
+			if r.downloadInFlight {
 				layouter.LayoutWidget(&r.downloadProgressBar, image.Rect(content.Min.X, progressBase+u, content.Max.X, progressBase+u+u/2))
 			}
-			if r.totalBytes > 0 && (r.downloadInFlight || (!r.downloadFailed && r.downloadDownloadedComplete())) {
+			if r.showDownloadProgressText() {
 				progressTextTop := progressBase + u
 				if r.downloadInFlight {
 					progressTextTop += u / 2
