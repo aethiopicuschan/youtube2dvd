@@ -3,7 +3,7 @@ module github.com/aethiopicuschan/youtube2dvd
 go 1.27.4
 
 require (
-	github.com/aethiopicuschan/video2dvd v1.0.0
+	github.com/aethiopicuschan/video2dvd v1.1.0
 	github.com/ebitengine/hideconsole v1.0.0
 	github.com/gravity-zero/mkvgo v0.66.2
 	github.com/guigui-gui/guigui v0.1.0
