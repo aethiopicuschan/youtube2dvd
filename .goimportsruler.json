@@ -1,1 +1,16 @@
-{}
+{
+    "rules": [
+        {
+            "name": "Ban cgo",
+            "description": "Disallow cgo usage in the project",
+            "sources": ["**"],
+            "disallow": ["C"]
+        },
+        {
+            "name": "Ban purego",
+            "description": "Disallow purego usage in the project",
+            "sources": ["**"],
+            "disallow": ["github.com/ebitengine/purego"]
+        }
+    ]
+}
