@@ -234,6 +234,9 @@ type fakeYtDlp struct {
 	// captions is written by a subtitle-only run, as yt-dlp names it;
 	// nil writes nothing, as yt-dlp does when the track is missing.
 	captions []byte
+	// forbidOnce makes the first download of these formats fail as YouTube
+	// refusing it does.
+	forbidOnce map[string]bool
 }
 
 func (f *fakeYtDlp) Run(_ context.Context, args []string, onLine func(string)) ([]byte, error) {
@@ -259,6 +262,10 @@ func (f *fakeYtDlp) Run(_ context.Context, args []string, onLine func(string)) (
 			return nil, err
 		}
 		return nil, f.failErr
+	}
+	if f.forbidOnce[format] {
+		delete(f.forbidOnce, format)
+		return nil, &ytDlpExitError{stderr: "ERROR: unable to download video data: HTTP Error 403: Forbidden"}
 	}
 	size, ok := f.sizes[format]
 	if !ok {
@@ -298,7 +305,7 @@ func assertOnlyFiles(t *testing.T, directory string, want ...string) {
 }
 
 func failingMux(t *testing.T) streamMuxer {
-	return func(context.Context, string, string, string) error {
+	return func(context.Context, string, []audioStream, string) error {
 		t.Error("mux was called for a single stream")
 		return nil
 	}
@@ -312,7 +319,7 @@ func TestDownloadWithYtDlpProgressive(t *testing.T) {
 	quality := downloadQuality{title: `テスト: 動画/01`, extension: ".mp4", ytDlpFormat: "18", videoSize: 2000}
 	var progresses []downloadProgress
 
-	path, _, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, failingMux(t), func(progress downloadProgress) {
+	path, _, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, nil, failingMux(t), func(progress downloadProgress) {
 		progresses = append(progresses, progress)
 	})
 	if err != nil {
@@ -341,7 +348,11 @@ func TestDownloadWithYtDlpCombinesStreams(t *testing.T) {
 	quality := downloadQuality{title: "combined", extension: ".webm", ytDlpFormat: "244", ytDlpAudioFormat: "251", videoSize: 3000, audioSize: 1000}
 	var progresses []downloadProgress
 	muxed := false
-	mux := func(_ context.Context, videoPath, audioPath, outputPath string) error {
+	mux := func(_ context.Context, videoPath string, audio []audioStream, outputPath string) error {
+		if len(audio) != 1 || !audio[0].Default {
+			t.Errorf("audio streams = %+v, want one default stream", audio)
+		}
+		audioPath := audio[0].Path
 		muxed = true
 		for _, input := range []string{videoPath, audioPath} {
 			if _, err := os.Stat(input); err != nil {
@@ -351,7 +362,7 @@ func TestDownloadWithYtDlpCombinesStreams(t *testing.T) {
 		return os.WriteFile(outputPath, []byte("combined"), 0o600)
 	}
 
-	path, _, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, mux, func(progress downloadProgress) {
+	path, _, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, nil, mux, func(progress downloadProgress) {
 		progresses = append(progresses, progress)
 	})
 	if err != nil {
@@ -435,7 +446,7 @@ func TestDownloadWithYtDlpFailuresLeaveNoFiles(t *testing.T) {
 			name:    "mux fails",
 			runner:  &fakeYtDlp{sizes: map[string]int{"244": 3000, "251": 1000}},
 			quality: downloadQuality{title: "video", extension: ".webm", ytDlpFormat: "244", ytDlpAudioFormat: "251"},
-			mux: func(_ context.Context, _, _, outputPath string) error {
+			mux: func(_ context.Context, _ string, _ []audioStream, outputPath string) error {
 				_ = os.WriteFile(outputPath, []byte("half"), 0o600)
 				return errors.New("broken stream")
 			},
@@ -451,9 +462,9 @@ func TestDownloadWithYtDlpFailuresLeaveNoFiles(t *testing.T) {
 			directory := t.TempDir()
 			mux := test.mux
 			if mux == nil {
-				mux = func(context.Context, string, string, string) error { return nil }
+				mux = func(context.Context, string, []audioStream, string) error { return nil }
 			}
-			path, _, err := downloadWithYtDlp(context.Background(), test.runner, directory, testVideoURL, test.quality, nil, mux, nil)
+			path, _, err := downloadWithYtDlp(context.Background(), test.runner, directory, testVideoURL, test.quality, nil, nil, mux, nil)
 			if err == nil {
 				t.Fatalf("download succeeded with %q, want an error", path)
 			}

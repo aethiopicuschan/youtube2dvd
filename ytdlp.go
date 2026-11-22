@@ -212,15 +212,21 @@ type ytDlpThumbnail struct {
 
 type ytDlpFormatInfo struct {
 	FormatID       string  `json:"format_id"`
+	FormatNote     string  `json:"format_note"`
+	URL            string  `json:"url"`
 	Ext            string  `json:"ext"`
 	Protocol       string  `json:"protocol"`
 	VideoCodec     string  `json:"vcodec"`
 	AudioCodec     string  `json:"acodec"`
+	Language       string  `json:"language"`
 	Height         int     `json:"height"`
 	AudioBitrate   float64 `json:"abr"`
 	TotalBitrate   float64 `json:"tbr"`
 	Filesize       float64 `json:"filesize"`
 	FilesizeApprox float64 `json:"filesize_approx"`
+	// LanguagePreference is highest for the audio track of the language
+	// the video was made in, and next for the one YouTube plays by default.
+	LanguagePreference *float64 `json:"language_preference"`
 }
 
 func (f ytDlpFormatInfo) hasVideo() bool {
@@ -306,13 +312,16 @@ func ytDlpQualities(info ytDlpInfo) []downloadQuality {
 			addQuality(format, nil)
 		}
 	}
+	// A dubbed video has an audio stream per language: the one to use
+	// unless asked for others is that of the language the video was made in,
+	// without compressed dynamic range.
 	var bestAudio *ytDlpFormatInfo
 	for i := range info.Formats {
 		format := &info.Formats[i]
 		if format.FormatID == "" || format.hasVideo() || !format.hasAudio() || format.Ext != "webm" {
 			continue
 		}
-		if bestAudio == nil || format.audioRate() > bestAudio.audioRate() {
+		if bestAudio == nil || ytDlpPreferredAudio(format, bestAudio) {
 			bestAudio = format
 		}
 	}
@@ -336,6 +345,28 @@ func ytDlpQualities(info ytDlpInfo) []downloadQuality {
 		qualities[i].itag = i + 1
 	}
 	return qualities
+}
+
+// ytDlpPreferredAudio reports whether format is a better audio stream to
+// use by default than current.
+func ytDlpPreferredAudio(format, current *ytDlpFormatInfo) bool {
+	preference := func(f *ytDlpFormatInfo) float64 {
+		if f.LanguagePreference == nil {
+			return 0
+		}
+		return *f.LanguagePreference
+	}
+	if a, b := preference(format), preference(current); a != b {
+		return a > b
+	}
+	_, formatDRC := youTubeAudioTags(format.URL)
+	_, currentDRC := youTubeAudioTags(current.URL)
+	formatDRC = formatDRC || strings.HasSuffix(format.FormatID, "-drc")
+	currentDRC = currentDRC || strings.HasSuffix(current.FormatID, "-drc")
+	if formatDRC != currentDRC {
+		return currentDRC
+	}
+	return format.audioRate() > current.audioRate()
 }
 
 // ytDlpThumbnailURL picks the largest thumbnail the app can decode.
@@ -374,7 +405,7 @@ func getYtDlpDetails(ctx context.Context, runner ytDlpRunner, videoURL string) (
 	if url := ytDlpThumbnailURL(info); url != "" {
 		thumbnail = fetchThumbnail(ctx, url)
 	}
-	details := videoInfo{title: info.Title, thumbnail: thumbnail, captions: ytDlpCaptions(info.Subtitles, info.AutomaticCaptions)}
+	details := videoInfo{title: info.Title, thumbnail: thumbnail, captions: ytDlpCaptions(info.Subtitles, info.AutomaticCaptions), audio: ytDlpAudio(info.Formats)}
 	qualities := ytDlpQualities(info)
 	if len(qualities) == 0 {
 		return details, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
@@ -413,15 +444,68 @@ func parseYtDlpProgress(line string) (downloadProgress, bool) {
 	return downloadProgress{downloaded: downloaded, total: total}, true
 }
 
-// streamMuxer combines separately downloaded video and audio into outputPath.
-type streamMuxer func(ctx context.Context, videoPath, audioPath, outputPath string) error
+// audioStream is a downloaded audio stream to combine with a video, and
+// how to describe its track. Default marks the track to play; the muxers put
+// the streams in the order given, the default one first.
+type audioStream struct {
+	Path     string
+	Language string
+	Name     string
+	Default  bool
+}
 
-// downloadWithYtDlp downloads quality of the video into directory and
-// embeds the requested caption tracks. It returns the path of the saved file
-// and, when captions could not be added, a warning: the video is saved
-// without them. Everything is first written to a temporary directory inside
-// directory, which is removed however the download ends.
-func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, videoURL string, quality downloadQuality, captions []requestedCaption, mux streamMuxer, onProgress func(downloadProgress)) (string, string, error) {
+// streamMuxer combines a downloaded video stream with audio streams into
+// outputPath. Only the picture of the video stream is used.
+type streamMuxer func(ctx context.Context, videoPath string, audio []audioStream, outputPath string) error
+
+// ytDlpRetryDelay is how long to wait before asking yt-dlp again for a
+// stream YouTube refused.
+var ytDlpRetryDelay = 5 * time.Second
+
+// isYtDlpForbidden reports whether yt-dlp failed because YouTube answered
+// with HTTP 403.
+func isYtDlpForbidden(err error) bool {
+	var exit *ytDlpExitError
+	return errors.As(err, &exit) && strings.Contains(exit.stderr, "HTTP Error 403")
+}
+
+// ytDlpAudioFetch is an audio stream to download for a requested track.
+type ytDlpAudioFetch struct {
+	choice ytDlpAudioChoice
+	stream audioStream
+}
+
+// ytDlpAudioFetches lists the audio streams to download for the requested
+// tracks in the container of quality, and the names of the tracks that are
+// not available in it. The first stream is the default one.
+func ytDlpAudioFetches(quality downloadQuality, audio []requestedAudio) ([]ytDlpAudioFetch, []string) {
+	var fetches []ytDlpAudioFetch
+	var failed []string
+	for _, request := range audio {
+		choice, err := ytDlpAudioFormat(request.Track, quality.extension)
+		if err != nil {
+			failed = append(failed, request.Track.label())
+			continue
+		}
+		fetches = append(fetches, ytDlpAudioFetch{choice: choice, stream: audioStream{
+			Language: request.Track.Language,
+			Name:     request.Track.label(),
+		}})
+	}
+	if len(fetches) > 0 {
+		// When the default track is not available, the next one plays.
+		fetches[0].stream.Default = true
+	}
+	return fetches, failed
+}
+
+// downloadWithYtDlp downloads quality of the video into directory with the
+// requested audio tracks, and embeds the requested caption tracks. It
+// returns the path of the saved file and a warning naming the tracks that
+// could not be added: the video is saved without them. Everything is first
+// written to a temporary directory inside directory, which is removed
+// however the download ends.
+func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, videoURL string, quality downloadQuality, audio []requestedAudio, captions []requestedCaption, mux streamMuxer, onProgress func(downloadProgress)) (string, string, error) {
 	if quality.ytDlpFormat == "" {
 		return "", "", fmt.Errorf("選択した画質は現在利用できません。画質を選び直してください")
 	}
@@ -439,18 +523,35 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 	// yt-dlp reports for this format alone.
 	fetch := func(formatID, name string, offset, total int64) (string, int64, error) {
 		path := filepath.Join(workDir, name)
-		_, err := runner.Run(ctx, ytDlpDownloadArgs(formatID, path, videoURL), func(line string) {
-			progress, ok := parseYtDlpProgress(line)
-			if !ok || onProgress == nil {
-				return
+		run := func() error {
+			_, err := runner.Run(ctx, ytDlpDownloadArgs(formatID, path, videoURL), func(line string) {
+				progress, ok := parseYtDlpProgress(line)
+				if !ok || onProgress == nil {
+					return
+				}
+				progress.downloaded += offset
+				if total > 0 {
+					progress.total = total
+					progress.downloaded = min(progress.downloaded, total)
+				}
+				onProgress(progress)
+			})
+			return err
+		}
+		err := run()
+		if isYtDlpForbidden(err) {
+			// YouTube refuses a stream now and then, more likely the more
+			// streams a download has; it usually serves it a moment later.
+			timer := time.NewTimer(ytDlpRetryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return "", 0, ctx.Err()
+			case <-timer.C:
 			}
-			progress.downloaded += offset
-			if total > 0 {
-				progress.total = total
-				progress.downloaded = min(progress.downloaded, total)
-			}
-			onProgress(progress)
-		})
+			_ = os.Remove(path)
+			err = run()
+		}
 		if err != nil {
 			return "", 0, err
 		}
@@ -461,53 +562,89 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 		return path, info.Size(), nil
 	}
 
+	// The streams to download: the video, and the audio to combine with it,
+	// if any. A single-file MP4 brings the audio YouTube plays by default;
+	// other tracks are downloaded on their own and take its place. A WebM
+	// quality always takes the requested tracks: its own audio stream is the
+	// original language, which need not be the default one.
+	type part struct {
+		formatID, name string
+		size           int64
+		stream         *audioStream
+	}
+	parts := []part{{formatID: quality.ytDlpFormat, name: "video" + quality.extension, size: quality.videoSize}}
+	var audioFailed []string
+	if len(audio) > 0 && (quality.ytDlpAudioFormat != "" || !onlyYouTubeDefaultAudio(audio)) {
+		var fetches []ytDlpAudioFetch
+		fetches, audioFailed = ytDlpAudioFetches(quality, audio)
+		for i, f := range fetches {
+			ext := ".m4a"
+			if quality.extension == ".webm" {
+				ext = ".webm"
+			}
+			parts = append(parts, part{formatID: f.choice.FormatID, name: fmt.Sprintf("audio-%d%s", i+1, ext), size: f.choice.Size, stream: &f.stream})
+		}
+	}
+	if len(parts) == 1 && quality.ytDlpAudioFormat != "" {
+		parts = append(parts, part{formatID: quality.ytDlpAudioFormat, name: "audio.webm", size: quality.audioSize, stream: &audioStream{Default: true}})
+	}
+
+	// Report several streams as one download. Without every size, or for a
+	// single stream, each reports the progress yt-dlp sees instead.
+	var total int64
+	if len(parts) > 1 {
+		for _, p := range parts {
+			if p.size <= 0 {
+				total = 0
+				break
+			}
+			total += p.size
+		}
+	}
 	var downloadedPath string
-	if quality.ytDlpAudioFormat == "" {
-		downloadedPath, _, err = fetch(quality.ytDlpFormat, "video"+quality.extension, 0, 0)
+	var streams []audioStream
+	var offset, fetched int64
+	for _, p := range parts {
+		path, size, err := fetch(p.formatID, p.name, offset, total)
 		if err != nil {
 			return "", "", err
 		}
-	} else {
-		// Report both streams as one download. Without both sizes each
-		// stream reports its own progress instead.
-		var total int64
-		if quality.videoSize > 0 && quality.audioSize > 0 {
-			total = quality.videoSize + quality.audioSize
-		}
-		videoPath, videoSize, err := fetch(quality.ytDlpFormat, "video.webm", 0, total)
-		if err != nil {
-			return "", "", err
-		}
-		var audioOffset int64
+		fetched += size
 		if total > 0 {
-			audioOffset = quality.videoSize
+			offset += p.size
 		}
-		audioPath, audioSize, err := fetch(quality.ytDlpAudioFormat, "audio.webm", audioOffset, total)
-		if err != nil {
-			return "", "", err
+		if p.stream == nil {
+			downloadedPath = path
+			continue
 		}
+		stream := *p.stream
+		stream.Path = path
+		streams = append(streams, stream)
+	}
+	if len(streams) > 0 {
 		if onProgress != nil {
-			onProgress(downloadProgress{downloaded: videoSize + audioSize, total: videoSize + audioSize})
+			onProgress(downloadProgress{downloaded: fetched, total: fetched})
 		}
-		downloadedPath = filepath.Join(workDir, "combined.webm")
-		if err := mux(ctx, videoPath, audioPath, downloadedPath); err != nil {
+		combinedPath := filepath.Join(workDir, "combined"+quality.extension)
+		if err := mux(ctx, downloadedPath, streams, combinedPath); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return "", "", ctxErr
 			}
 			return "", "", fmt.Errorf("動画と音声を結合できませんでした: %w", err)
 		}
+		downloadedPath = combinedPath
 	}
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
 
-	var warning string
+	var captionWarning string
 	if len(captions) > 0 {
 		tracks := make([]captionTrack, 0, len(captions))
 		for _, caption := range captions {
 			tracks = append(tracks, caption.Track)
 		}
-		warning = addCaptions(ctx, downloadedPath, captions, fetchYtDlpCaptions(ctx, runner, workDir, tracks, videoURL))
+		captionWarning = addCaptions(ctx, downloadedPath, captions, fetchYtDlpCaptions(ctx, runner, workDir, tracks, videoURL))
 		if err := ctx.Err(); err != nil {
 			return "", "", err
 		}
@@ -517,7 +654,7 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 	if err := os.Rename(downloadedPath, outputPath); err != nil {
 		return "", "", fmt.Errorf("保存先へ移動できません: %w", err)
 	}
-	return outputPath, warning, nil
+	return outputPath, joinWarnings(audioWarning(audioFailed), captionWarning), nil
 }
 
 // videoDetails looks up a video with the downloader chosen in settings. When
@@ -530,18 +667,17 @@ func videoDetails(ctx context.Context, settings appSettings, videoURL string) (v
 	return getYouTubeDetails(ctx, videoURL)
 }
 
-// downloadVideo downloads quality and the requested captions with the
-// downloader that listed them. See downloadWithYtDlp for the results.
-func downloadVideo(ctx context.Context, settings appSettings, videoURL string, quality downloadQuality, captions []requestedCaption, onProgress func(downloadProgress)) (string, string, error) {
+// downloadVideo downloads quality, the requested audio tracks and the
+// requested captions with the downloader that listed them. See
+// downloadWithYtDlp for the results.
+func downloadVideo(ctx context.Context, settings appSettings, videoURL string, quality downloadQuality, audio []requestedAudio, captions []requestedCaption, onProgress func(downloadProgress)) (string, string, error) {
 	if quality.ytDlpFormat == "" {
+		// The built-in downloader offers no choice of audio.
 		return downloadYouTubeVideo(ctx, videoURL, quality, captions, onProgress)
 	}
 	directory, err := downloadDirectory()
 	if err != nil {
 		return "", "", err
 	}
-	mux := func(ctx context.Context, videoPath, audioPath, outputPath string) error {
-		return muxDownloadedStreams(ctx, videoPath, audioPath, outputPath, ".webm", "video/webm")
-	}
-	return downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, captions, mux, onProgress)
+	return downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, audio, captions, muxerFor(quality.extension), onProgress)
 }

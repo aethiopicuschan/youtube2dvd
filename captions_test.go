@@ -288,7 +288,7 @@ func TestDownloadWithYtDlpKeepsVideoWhenCaptionsFail(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
 			quality := downloadQuality{title: "video", extension: ".mp4", ytDlpFormat: "18", videoSize: 2000}
-			path, warning, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, captions, failingMux(t), nil)
+			path, warning, err := downloadWithYtDlp(context.Background(), runner, directory, testVideoURL, quality, nil, captions, failingMux(t), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

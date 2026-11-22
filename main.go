@@ -152,19 +152,34 @@ type root struct {
 	additionalCaptionLabel  basicwidget.Text
 	additionalCaptionButton basicwidget.Button
 	additionalCaptionText   basicwidget.Text
-	captionPicker           captionPickerDialog
-	selectedQualityItag     int
-	qualityLookupURL        string
-	confirmedVideoURL       string
-	qualityLookupAt         time.Time
-	qualityRequestID        uint64
-	qualityLoading          bool
-	qualityError            string
-	cancelQualityLookup     stdcontext.CancelFunc
-	internetState           string
-	driveState              string
-	discState               string
-	dvdDrives               []dvdDrive
+	captionPicker           trackPickerDialog
+	videoAudio              videoAudio
+	// videoOtherAudio is set for a video with audio in other languages that
+	// the downloader in use cannot fetch.
+	videoOtherAudio bool
+	audioNote       basicwidget.Text
+	// selectedAudioID is the audio track to play by default, and
+	// additionalAudioIDs are the other tracks to put in the file.
+	selectedAudioID       string
+	additionalAudioIDs    map[string]bool
+	audioLabel            basicwidget.Text
+	audioSelect           basicwidget.Select[string]
+	additionalAudioLabel  basicwidget.Text
+	additionalAudioButton basicwidget.Button
+	additionalAudioText   basicwidget.Text
+	audioPicker           trackPickerDialog
+	selectedQualityItag   int
+	qualityLookupURL      string
+	confirmedVideoURL     string
+	qualityLookupAt       time.Time
+	qualityRequestID      uint64
+	qualityLoading        bool
+	qualityError          string
+	cancelQualityLookup   stdcontext.CancelFunc
+	internetState         string
+	driveState            string
+	discState             string
+	dvdDrives             []dvdDrive
 }
 
 type downloadResult struct {
@@ -889,6 +904,8 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 		// The quality, like the captions, cannot change while it downloads.
 		context.SetEnabled(&r.qualitySelect, len(qualityItems) > 0 && !r.downloadInFlight)
+		r.buildAudioRows(context)
+		r.buildAudioPicker()
 		r.buildCaptionRows(context)
 		r.buildCaptionPicker()
 		qualityStatus := r.qualityError
@@ -936,9 +953,10 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 			r.downloadedBytes = 0
 			r.totalBytes = 0
 			settings := r.settings
+			audio := r.chosenAudio()
 			captions := r.chosenCaptions()
 			go func() {
-				path, warning, err := downloadVideo(ctx, settings, videoURL, quality, captions, func(progress downloadProgress) {
+				path, warning, err := downloadVideo(ctx, settings, videoURL, quality, audio, captions, func(progress downloadProgress) {
 					select {
 					case r.downloadProgresses <- progress:
 					default:
@@ -1202,6 +1220,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.about)
 	adder.AddWidget(&r.dvdWriteDialog)
 	adder.AddWidget(&r.dvdProgressDialog)
+	adder.AddWidget(&r.audioPicker)
 	adder.AddWidget(&r.captionPicker)
 	adder.AddWidget(&r.title)
 	if r.showSettings {
@@ -1230,6 +1249,7 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 				adder.AddWidget(&r.qualityLabel)
 				adder.AddWidget(&r.qualitySelect)
 				adder.AddWidget(&r.downloadButton)
+				r.addAudioRows(adder)
 				r.addCaptionRows(adder)
 			} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
 				adder.AddWidget(&r.qualityStatus)
@@ -1677,6 +1697,10 @@ func (r *root) Tick(_ *guigui.Context, _ *guigui.WidgetBounds) error {
 				r.videoCaptions = result.info.captions
 				r.selectedCaptionID = ""
 				r.additionalCaptionIDs = nil
+				r.videoAudio = result.info.audio
+				r.videoOtherAudio = result.info.otherAudio
+				r.selectedAudioID = result.info.audio.defaultID()
+				r.additionalAudioIDs = nil
 				if result.err != nil || len(result.info.qualities) == 0 {
 					r.qualityOptions = nil
 					r.selectedQualityItag = 0
@@ -1912,7 +1936,11 @@ func (r *root) buildCaptionRows(context *guigui.Context) {
 		r.captionPicker.SetOpen(true)
 		guigui.RequestRebuild()
 	})
-	summary := additionalCaptionsSummary(r.chosenAdditionalCaptions())
+	var labels []string
+	for _, track := range r.chosenAdditionalCaptions() {
+		labels = append(labels, track.label())
+	}
+	summary := additionalTracksSummary(labels)
 	r.additionalCaptionText.SetValue(summary)
 	r.additionalCaptionText.SetSelectable(false)
 	r.additionalCaptionText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
@@ -1925,7 +1953,11 @@ func (r *root) buildCaptionRows(context *guigui.Context) {
 
 // buildCaptionPicker sets up the popup that picks the additional tracks.
 func (r *root) buildCaptionPicker() {
-	r.captionPicker.tracks = r.additionalCaptionCandidates()
+	r.captionPicker.heading = "追加の字幕"
+	r.captionPicker.choices = r.captionPicker.choices[:0]
+	for _, track := range r.additionalCaptionCandidates() {
+		r.captionPicker.choices = append(r.captionPicker.choices, trackChoice{ID: track.ID, Label: track.label()})
+	}
 	r.captionPicker.selected = r.additionalCaptionIDs
 	r.captionPicker.onToggle = func(id string, on bool) {
 		if r.downloadInFlight {
@@ -1955,6 +1987,187 @@ func (r *root) addCaptionRows(adder *guigui.ChildAdder) {
 		adder.AddWidget(&r.additionalCaptionButton)
 		adder.AddWidget(&r.additionalCaptionText)
 	}
+}
+
+// additionalAudioCandidates are the audio tracks that can be added besides
+// the default one.
+func (r *root) additionalAudioCandidates() []audioTrack {
+	var tracks []audioTrack
+	for _, track := range r.videoAudio.Tracks {
+		if track.ID != r.selectedAudioID {
+			tracks = append(tracks, track)
+		}
+	}
+	return tracks
+}
+
+// chosenAdditionalAudio are the additional audio tracks the user checked,
+// in the order of the track list.
+func (r *root) chosenAdditionalAudio() []audioTrack {
+	var tracks []audioTrack
+	for _, track := range r.additionalAudioCandidates() {
+		if r.additionalAudioIDs[track.ID] {
+			tracks = append(tracks, track)
+		}
+	}
+	return tracks
+}
+
+// showAudioRows reports whether the 音声 rows are shown: only for a video
+// that has audio in more than one language. The rest have nothing to choose.
+func (r *root) showAudioRows() bool {
+	return len(r.videoAudio.Tracks) > 1
+}
+
+// showAudioNote reports whether the 音声 row only tells that the video has
+// audio in other languages, which the built-in downloader cannot fetch.
+func (r *root) showAudioNote() bool {
+	return !r.showAudioRows() && r.videoOtherAudio
+}
+
+// buildAudioRows sets up the 音声 row, which picks the track to play by
+// default, and the 追加の音声 row, which picks any number of other tracks.
+func (r *root) buildAudioRows(context *guigui.Context) {
+	r.audioLabel.SetValue("音声")
+	r.audioLabel.SetSelectable(false)
+	r.audioLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	if r.showAudioNote() {
+		note := "他の言語の音声は、「設定」でyt-dlpを使うと選べます"
+		r.audioNote.SetValue(note)
+		r.audioNote.SetSelectable(false)
+		r.audioNote.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+		var noteStyle basicwidget.TextStyles
+		noteStyle.SetColorInRange(0, len(note), color.RGBA{R: 120, G: 120, B: 120, A: 255})
+		r.audioNote.SetOverrideStyles(&noteStyle, false)
+		return
+	}
+	if !r.showAudioRows() {
+		return
+	}
+	items := make([]basicwidget.SelectItem[string], 0, len(r.videoAudio.Tracks))
+	for _, track := range r.videoAudio.Tracks {
+		items = append(items, basicwidget.SelectItem[string]{Text: track.label(), Value: track.ID})
+	}
+	r.audioSelect.SetItems(items)
+	r.audioSelect.SelectItemByValue(r.selectedAudioID)
+	r.audioSelect.OnItemSelected(func(_ *guigui.Context, index int) {
+		item, ok := r.audioSelect.ItemByIndex(index)
+		if !ok || item.Value == r.selectedAudioID || r.downloadInFlight {
+			return
+		}
+		r.selectedAudioID = item.Value
+		// The default track is not also an additional one.
+		delete(r.additionalAudioIDs, item.Value)
+		guigui.RequestRebuild()
+	})
+	context.SetEnabled(&r.audioSelect, !r.downloadInFlight)
+
+	r.additionalAudioLabel.SetValue("追加の音声")
+	r.additionalAudioLabel.SetSelectable(false)
+	r.additionalAudioLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	r.additionalAudioButton.SetText("選択")
+	context.SetEnabled(&r.additionalAudioButton, !r.downloadInFlight)
+	r.additionalAudioButton.OnDown(func(_ *guigui.Context) {
+		if r.downloadInFlight {
+			return
+		}
+		r.audioPicker.SetOpen(true)
+		guigui.RequestRebuild()
+	})
+	var labels []string
+	for _, track := range r.chosenAdditionalAudio() {
+		labels = append(labels, track.label())
+	}
+	summary := additionalTracksSummary(labels)
+	r.additionalAudioText.SetValue(summary)
+	r.additionalAudioText.SetSelectable(false)
+	r.additionalAudioText.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	var summaryStyle basicwidget.TextStyles
+	if summary == "なし" {
+		summaryStyle.SetColorInRange(0, len(summary), color.RGBA{R: 120, G: 120, B: 120, A: 255})
+	}
+	r.additionalAudioText.SetOverrideStyles(&summaryStyle, false)
+}
+
+// buildAudioPicker sets up the popup that picks the additional audio
+// tracks.
+func (r *root) buildAudioPicker() {
+	r.audioPicker.heading = "追加の音声"
+	r.audioPicker.choices = r.audioPicker.choices[:0]
+	for _, track := range r.additionalAudioCandidates() {
+		r.audioPicker.choices = append(r.audioPicker.choices, trackChoice{ID: track.ID, Label: track.label()})
+	}
+	r.audioPicker.selected = r.additionalAudioIDs
+	r.audioPicker.onToggle = func(id string, on bool) {
+		if r.downloadInFlight {
+			return
+		}
+		if r.additionalAudioIDs == nil {
+			r.additionalAudioIDs = make(map[string]bool)
+		}
+		if on {
+			r.additionalAudioIDs[id] = true
+		} else {
+			delete(r.additionalAudioIDs, id)
+		}
+	}
+}
+
+// addAudioRows adds the widgets of the audio rows, when they are shown.
+func (r *root) addAudioRows(adder *guigui.ChildAdder) {
+	if r.showAudioNote() {
+		adder.AddWidget(&r.audioLabel)
+		adder.AddWidget(&r.audioNote)
+		return
+	}
+	if !r.showAudioRows() {
+		return
+	}
+	adder.AddWidget(&r.audioLabel)
+	adder.AddWidget(&r.audioSelect)
+	adder.AddWidget(&r.additionalAudioLabel)
+	adder.AddWidget(&r.additionalAudioButton)
+	adder.AddWidget(&r.additionalAudioText)
+}
+
+// layoutAudioRows lays out the audio rows from top, when they are shown, and
+// returns the top of the row after them.
+func (r *root) layoutAudioRows(context *guigui.Context, layouter *guigui.ChildLayouter, content image.Rectangle, top int) int {
+	u := basicwidget.UnitSize(context)
+	left, right := downloadRowColumns(context, content)
+	if r.showAudioNote() {
+		layouter.LayoutWidget(&r.audioLabel, image.Rect(content.Min.X, top, left, top+u))
+		layouter.LayoutWidget(&r.audioNote, image.Rect(left, top, content.Max.X, top+u))
+		return top + 5*u/4
+	}
+	if !r.showAudioRows() {
+		return top
+	}
+	layouter.LayoutWidget(&r.audioLabel, image.Rect(content.Min.X, top, left, top+u))
+	layouter.LayoutWidget(&r.audioSelect, image.Rect(left, top, right, top+u))
+	top += 5 * u / 4
+	layouter.LayoutWidget(&r.additionalAudioLabel, image.Rect(content.Min.X, top, left, top+u))
+	buttonWidth := 3 * u
+	layouter.LayoutWidget(&r.additionalAudioButton, image.Rect(left, top, left+buttonWidth, top+u))
+	layouter.LayoutWidget(&r.additionalAudioText, image.Rect(left+buttonWidth+u/2, top, content.Max.X, top+u))
+	return top + 5*u/4
+}
+
+// chosenAudio returns the audio tracks to put in the file: the default one
+// first, then the additional ones. It is empty for a video with a single
+// audio track.
+func (r *root) chosenAudio() []requestedAudio {
+	if !r.showAudioRows() {
+		return nil
+	}
+	var audio []requestedAudio
+	if track, ok := r.videoAudio.find(r.selectedAudioID); ok {
+		audio = append(audio, requestedAudio{Track: track, Default: true})
+	}
+	for _, track := range r.chosenAdditionalAudio() {
+		audio = append(audio, requestedAudio{Track: track})
+	}
+	return audio
 }
 
 // The rows below a video share a label column, so that their controls line
@@ -2036,6 +2249,10 @@ func (r *root) queueQualityLookup(videoURL string) {
 	r.videoCaptions = videoCaptions{}
 	r.selectedCaptionID = ""
 	r.additionalCaptionIDs = nil
+	r.videoAudio = videoAudio{}
+	r.videoOtherAudio = false
+	r.selectedAudioID = ""
+	r.additionalAudioIDs = nil
 	r.confirmedVideoURL = ""
 	r.videoTitle.SetValue("")
 	r.thumbnail.SetImage(nil)
@@ -2066,6 +2283,10 @@ func (r *root) clearConfirmedVideo() {
 	r.videoCaptions = videoCaptions{}
 	r.selectedCaptionID = ""
 	r.additionalCaptionIDs = nil
+	r.videoAudio = videoAudio{}
+	r.videoOtherAudio = false
+	r.selectedAudioID = ""
+	r.additionalAudioIDs = nil
 	r.confirmedVideoURL = ""
 	r.qualityError = ""
 	r.qualityLoading = false
@@ -2111,6 +2332,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 	layouter.LayoutWidget(&r.background, b)
 	layouter.LayoutWidget(&r.dvdWriteDialog, b)
 	layouter.LayoutWidget(&r.dvdProgressDialog, b)
+	layouter.LayoutWidget(&r.audioPicker, b)
 	layouter.LayoutWidget(&r.captionPicker, b)
 	sidebarWidth := 9 * u
 	layouter.LayoutWidget(&r.sidebar, image.Rect(b.Min.X, b.Min.Y, b.Min.X+sidebarWidth, b.Max.Y))
@@ -2235,7 +2457,8 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					buttonTop = qualityTop
 				}
 				if len(r.qualityOptions) > 0 {
-					progressBase = r.layoutCaptionRows(context, layouter, content, buttonTop+5*u/4)
+					captionTop := r.layoutAudioRows(context, layouter, content, buttonTop+5*u/4)
+					progressBase = r.layoutCaptionRows(context, layouter, content, captionTop)
 				}
 			} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
 				layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))

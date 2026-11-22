@@ -9,26 +9,29 @@ import (
 	"github.com/guigui-gui/guigui/basicwidget"
 )
 
-// captionPickerDialog lets the user pick the additional caption tracks: one
-// checkbox per track, in a list that scrolls for videos with many languages.
-type captionPickerDialog struct {
+// trackPickerDialog lets the user pick additional tracks, of captions or
+// audio: one checkbox per track, in a list that scrolls for videos with many
+// languages.
+type trackPickerDialog struct {
 	guigui.DefaultWidget
 
 	popup   basicwidget.Popup
-	content captionPickerContent
+	content trackPickerContent
 
-	// tracks are the tracks that can be added; selected tells which are.
-	tracks   []captionTrack
+	// heading names what is picked, such as "追加の字幕".
+	heading string
+	// choices are the tracks that can be added; selected tells which are.
+	choices  []trackChoice
 	selected map[string]bool
 	// onToggle is called when the user checks or unchecks a track.
 	onToggle func(id string, on bool)
 }
 
-func (d *captionPickerDialog) SetOpen(open bool) {
+func (d *trackPickerDialog) SetOpen(open bool) {
 	d.popup.SetOpen(open)
 }
 
-func (d *captionPickerDialog) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
+func (d *trackPickerDialog) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&d.popup)
 	// The popup measures its content before building it, so the content
 	// and its list must know the dialog already.
@@ -42,25 +45,31 @@ func (d *captionPickerDialog) Build(_ *guigui.Context, adder *guigui.ChildAdder)
 	return nil
 }
 
-func (d *captionPickerDialog) Layout(context *guigui.Context, _ *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
+func (d *trackPickerDialog) Layout(context *guigui.Context, _ *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
 	size := d.content.Measure(context, guigui.Constraints{})
 	app := context.AppBounds()
 	pos := image.Pt(app.Min.X+(app.Dx()-size.X)/2, app.Min.Y+(app.Dy()-size.Y)/2)
 	layouter.LayoutWidget(&d.popup, image.Rectangle{Min: pos, Max: pos.Add(size)})
 }
 
-type captionPickerContent struct {
+// trackChoice is a track offered in a trackPickerDialog.
+type trackChoice struct {
+	ID    string
+	Label string
+}
+
+type trackPickerContent struct {
 	guigui.DefaultWidget
 
-	dialog      *captionPickerDialog
+	dialog      *trackPickerDialog
 	heading     basicwidget.Text
 	panel       basicwidget.Panel
-	list        captionChoiceList
+	list        trackChoiceList
 	closeButton basicwidget.Button
 }
 
-func (c *captionPickerContent) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
-	c.heading.SetValue("追加の字幕")
+func (c *trackPickerContent) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
+	c.heading.SetValue(c.dialog.heading)
 	c.heading.SetSelectable(false)
 	c.heading.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	c.list.dialog = c.dialog
@@ -77,7 +86,7 @@ func (c *captionPickerContent) Build(_ *guigui.Context, adder *guigui.ChildAdder
 	return nil
 }
 
-func (c *captionPickerContent) Measure(context *guigui.Context, _ guigui.Constraints) image.Point {
+func (c *trackPickerContent) Measure(context *guigui.Context, _ guigui.Constraints) image.Point {
 	u := basicwidget.UnitSize(context)
 	app := context.AppBounds()
 	listHeight := c.list.Measure(context, guigui.FixedWidthConstraints(14*u)).Y
@@ -85,7 +94,7 @@ func (c *captionPickerContent) Measure(context *guigui.Context, _ guigui.Constra
 	return image.Pt(min(16*u, app.Dx()-2*u), min(height, app.Dy()-2*u))
 }
 
-func (c *captionPickerContent) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
+func (c *trackPickerContent) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
 	b := bounds.Bounds()
 	u := basicwidget.UnitSize(context)
 	x := b.Min.X + u/2
@@ -98,30 +107,30 @@ func (c *captionPickerContent) Layout(context *guigui.Context, bounds *guigui.Wi
 	layouter.LayoutWidget(&c.closeButton, image.Rect(b.Max.X-u/2-buttonWidth, buttonTop, b.Max.X-u/2, buttonTop+u))
 }
 
-// captionChoiceList is the scrolling content of the picker: one row per
+// trackChoiceList is the scrolling content of the picker: one row per
 // track.
-type captionChoiceList struct {
+type trackChoiceList struct {
 	guigui.DefaultWidget
 
-	dialog *captionPickerDialog
-	rows   []captionChoiceRow
+	dialog *trackPickerDialog
+	rows   []trackChoiceRow
 }
 
-func (l *captionChoiceList) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
-	tracks := l.dialog.tracks
-	if len(l.rows) != len(tracks) {
-		l.rows = make([]captionChoiceRow, len(tracks))
+func (l *trackChoiceList) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
+	choices := l.dialog.choices
+	if len(l.rows) != len(choices) {
+		l.rows = make([]trackChoiceRow, len(choices))
 	}
-	for i, track := range tracks {
+	for i, choice := range choices {
 		row := &l.rows[i]
-		row.track = track
+		row.choice = choice
 		row.dialog = l.dialog
 		adder.AddWidget(row)
 	}
 	return nil
 }
 
-func (l *captionChoiceList) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
+func (l *trackChoiceList) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
 	b := bounds.Bounds()
 	u := basicwidget.UnitSize(context)
 	for i := range l.rows {
@@ -130,7 +139,7 @@ func (l *captionChoiceList) Layout(context *guigui.Context, bounds *guigui.Widge
 	}
 }
 
-func (l *captionChoiceList) Measure(context *guigui.Context, constraints guigui.Constraints) image.Point {
+func (l *trackChoiceList) Measure(context *guigui.Context, constraints guigui.Constraints) image.Point {
 	u := basicwidget.UnitSize(context)
 	width, ok := constraints.FixedWidth()
 	if !ok {
@@ -138,25 +147,25 @@ func (l *captionChoiceList) Measure(context *guigui.Context, constraints guigui.
 	}
 	count := 0
 	if l.dialog != nil {
-		count = len(l.dialog.tracks)
+		count = len(l.dialog.choices)
 	}
 	return image.Pt(width, u/4+count*(u+u/4))
 }
 
-// captionChoiceRow is a checkbox with the name of a caption track.
-type captionChoiceRow struct {
+// trackChoiceRow is a checkbox with the name of a track.
+type trackChoiceRow struct {
 	guigui.DefaultWidget
 
 	checkbox basicwidget.Checkbox
 	label    basicwidget.Text
 
-	track  captionTrack
-	dialog *captionPickerDialog
+	choice trackChoice
+	dialog *trackPickerDialog
 }
 
-func (r *captionChoiceRow) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
-	r.checkbox.SetValue(r.dialog.selected[r.track.ID])
-	id := r.track.ID
+func (r *trackChoiceRow) Build(_ *guigui.Context, adder *guigui.ChildAdder) error {
+	r.checkbox.SetValue(r.dialog.selected[r.choice.ID])
+	id := r.choice.ID
 	r.checkbox.OnValueChanged(func(_ *guigui.Context, value bool) {
 		if r.dialog.selected[id] == value || r.dialog.onToggle == nil {
 			return
@@ -164,7 +173,7 @@ func (r *captionChoiceRow) Build(_ *guigui.Context, adder *guigui.ChildAdder) er
 		r.dialog.onToggle(id, value)
 		guigui.RequestRebuild()
 	})
-	r.label.SetValue(r.track.label())
+	r.label.SetValue(r.choice.Label)
 	r.label.SetSelectable(false)
 	r.label.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
 	adder.AddWidget(&r.checkbox)
@@ -172,7 +181,7 @@ func (r *captionChoiceRow) Build(_ *guigui.Context, adder *guigui.ChildAdder) er
 	return nil
 }
 
-func (r *captionChoiceRow) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
+func (r *trackChoiceRow) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layouter *guigui.ChildLayouter) {
 	b := bounds.Bounds()
 	u := basicwidget.UnitSize(context)
 	size := r.checkbox.Measure(context, guigui.Constraints{})
@@ -181,16 +190,12 @@ func (r *captionChoiceRow) Layout(context *guigui.Context, bounds *guigui.Widget
 	layouter.LayoutWidget(&r.label, image.Rect(b.Min.X+size.X+u/3, b.Min.Y, b.Max.X, b.Max.Y))
 }
 
-// additionalCaptionsSummary describes the chosen additional tracks for the
-// download page. The count comes first, so that it stays readable when a
-// narrow window cuts the names off.
-func additionalCaptionsSummary(tracks []captionTrack) string {
-	if len(tracks) == 0 {
+// additionalTracksSummary describes the chosen additional tracks, by their
+// labels, for the download page. The count comes first, so that it stays
+// readable when a narrow window cuts the names off.
+func additionalTracksSummary(labels []string) string {
+	if len(labels) == 0 {
 		return "なし"
 	}
-	names := make([]string, 0, len(tracks))
-	for _, track := range tracks {
-		names = append(names, track.label())
-	}
-	return strconv.Itoa(len(names)) + "件（" + strings.Join(names, "、") + "）"
+	return strconv.Itoa(len(labels)) + "件（" + strings.Join(labels, "、") + "）"
 }

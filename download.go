@@ -208,6 +208,10 @@ type videoInfo struct {
 	thumbnail image.Image
 	qualities []downloadQuality
 	captions  videoCaptions
+	audio     videoAudio
+	// otherAudio is set when the video has audio in other languages that
+	// the downloader cannot fetch, so that the user can be told.
+	otherAudio bool
 }
 
 type qualityLookupResult struct {
@@ -274,7 +278,7 @@ func getYouTubeDetails(ctx context.Context, videoURL string) (videoInfo, error) 
 		}
 		return qualities[i].extension < qualities[j].extension
 	})
-	info := videoInfo{title: video.Title, thumbnail: thumbnail, captions: builtinCaptions(video.CaptionTracks)}
+	info := videoInfo{title: video.Title, thumbnail: thumbnail, captions: builtinCaptions(video.CaptionTracks), otherAudio: builtinHasOtherAudio(video.Formats)}
 	if len(qualities) == 0 {
 		return info, fmt.Errorf("音声付きで取得できる動画形式が見つかりません")
 	}
