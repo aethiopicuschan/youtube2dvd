@@ -1,9 +1,11 @@
 github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
+github.com/aethiopicuschan/go-264 v0.1.0 h1:iAmMxmP/bSD+MsxyPP0Fp7UfEGLqCfGGpz3LKq8NK0I=
+github.com/aethiopicuschan/go-264 v0.1.0/go.mod h1:gwDNcjV23TeDIzydgKUamkvgkNmKXJ/T0lQadX9freQ=
 github.com/aethiopicuschan/go-vp9 v0.0.0-20261121015925-4aa516dbdfd3 h1:+IyWVWX+GzVf08GdkNbnHa2ilUm5FcPfz0aAUxGXTYQ=
 github.com/aethiopicuschan/go-vp9 v0.0.0-20261121015925-4aa516dbdfd3/go.mod h1:00alyc82DTPTC8zwGk9kM2u1r8FP/WSiFWXdWAMbP7s=
-github.com/aethiopicuschan/video2dvd v1.2.0 h1:4VkK27kS/4nrWnvh9mOk6BF470pwotEwvgItBWwyxWA=
-github.com/aethiopicuschan/video2dvd v1.2.0/go.mod h1:Gg9OJv2Nw5W6jIiUneT4Vf1m4JgUtDr7DbyjKN+yxYs=
+github.com/aethiopicuschan/video2dvd v1.2.1 h1:xUxBqo6vfjTm8GsX1Nu99YKmFxPzJ/vSPXb6bkYEh/0=
+github.com/aethiopicuschan/video2dvd v1.2.1/go.mod h1:zDgKG1vdTZJC8XJbTH2Yt8jfpiMD/48fFK/R821+esQ=
 github.com/akavel/rsrc v0.10.2 h1:Zxm8V5eI1hW4gGaYsJQUhxpjkENuG91ki8B4zCrvEsw=
 github.com/akavel/rsrc v0.10.2/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
 github.com/arabian9ts/aac-go v0.1.0 h1:e298pHWu+Xcv6VPU2hmS1UTmOq5C9KHD38eQcJR4K8c=
@@ -57,8 +59,6 @@ github.com/pierrec/lz4/v4 v4.1.29 h1:CDQY6qZOLI4DW0Nx6R1vRrifrCeQHnNXkMb0hZWXFjg
 github.com/pierrec/lz4/v4 v4.1.29/go.mod h1:EoQMVJgeeEOMsCqCzqFm2O0cJvljX2nGZjcRIPL34O4=
 github.com/randall77/makefat v0.0.0-20260406194835-1b91746796b7 h1:m1yKMZwDSXkT5o2MKhd6ihdzb2dYb6eElNE04xjOSEY=
 github.com/randall77/makefat v0.0.0-20260406194835-1b91746796b7/go.mod h1:T1TLSfyWVBRXVGzWd0o9BI4kfoO9InEgfQe4NV3mLz8=
-github.com/rcarmo/go-264 v0.0.0-20261008100743-cecca3835cbd h1:zU+ECAakEaTv/LaSN1sCLKmG0BCIfdJopgiWYd8YYZY=
-github.com/rcarmo/go-264 v0.0.0-20261008100743-cecca3835cbd/go.mod h1:3VOB625E/ceyQZy0FTCGoDujYj2pFdHPuiwXXhZ/JSk=
 github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef h1:Ch6Q+AZUxDBCVqdkI8FSpFyZDtCVBc2VmejdNrm5rRQ=
 github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef/go.mod h1:nXTWP6+gD5+LUJ8krVhhoeHjvHTutPxMYl5SvkcnJNE=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=

@@ -340,8 +340,8 @@ func dvdMediaDuration(media video2dvd.MP4Info) time.Duration {
 }
 
 // dvdAudioStreams counts the audio streams a video gives its DVD title with
-// dvdExportOptions: the tracks video2dvd decodes, AAC only in mono or
-// stereo, up to the eight a title can have.
+// dvdExportOptions: the tracks video2dvd decodes, up to the eight a title can
+// have.
 func dvdAudioStreams(media video2dvd.MP4Info) int {
 	const maxStreams = 8
 	streams := 0
@@ -350,11 +350,39 @@ func dvdAudioStreams(media video2dvd.MP4Info) int {
 			continue
 		}
 		switch {
-		case track.Codec == "mp4a" && track.Channels <= 2, track.Codec == "ac-3", track.Codec == "opus":
+		case track.Codec == "mp4a" && dvdDecodableAAC(track), track.Codec == "ac-3", track.Codec == "opus":
 			streams++
 		}
 	}
 	return min(streams, maxStreams)
+}
+
+// dvdDecodableAAC reports whether video2dvd decodes an AAC track: mono or
+// stereo, or AAC-LC with channel configuration 3 to 7, which it downmixes.
+// The AudioSpecificConfig tells the channels; the sample entry often says 2
+// whatever the stream has.
+func dvdDecodableAAC(track video2dvd.TrackInfo) bool {
+	channels, objectType, configuration := track.Channels, 0, -1
+	if config := track.CodecConfig; len(config) >= 2 {
+		objectType = int(config[0] >> 3)
+		frequencyIndex := (config[0]&0x07)<<1 | config[1]>>7
+		if objectType != 31 && frequencyIndex != 15 {
+			configuration = int(config[1]>>3) & 0x0f
+			if configuration != 0 {
+				channels = map[int]int{1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8}[configuration]
+			}
+		}
+	}
+	switch {
+	case configuration > 7:
+		return false
+	case channels <= 2:
+		return true
+	case configuration == 0:
+		// Channels given by a program config element.
+		return false
+	}
+	return objectType == 2
 }
 
 // dvdISOSizeEstimate estimates the size of the ISO image of queue with
