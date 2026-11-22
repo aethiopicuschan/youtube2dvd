@@ -1790,6 +1790,25 @@ func checkEnvironment() environmentCheck {
 	return result
 }
 
+// discBurningReportHasDVDWriter reports whether the output of
+// "system_profiler SPDiscBurningDataType" lists a drive that writes DVDs.
+// A drive has a line such as "DVD-Write: -R, -R DL, -RW, +R, +R DL, +RW",
+// naming the media it writes; a drive that only reads has no such line or
+// says "No". Without any drive the report is empty.
+func discBurningReportHasDVDWriter(report string) bool {
+	for line := range strings.SplitSeq(report, "\n") {
+		key, value, found := strings.Cut(line, ":")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "DVD-Write") {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value != "" && !strings.EqualFold(value, "No") {
+			return true
+		}
+	}
+	return false
+}
+
 func hasDVDDrive() bool {
 	switch runtime.GOOS {
 	case "darwin":
@@ -1799,8 +1818,7 @@ func hasDVDDrive() bool {
 		if err != nil {
 			return false
 		}
-		text := strings.ToLower(string(output))
-		return strings.Contains(text, "dvd-write: yes") || strings.Contains(text, "cd-write: yes") || strings.Contains(text, "disc burning: yes")
+		return discBurningReportHasDVDWriter(string(output))
 	case "linux":
 		return len(linuxOpticalDevices()) > 0
 	case "windows":
