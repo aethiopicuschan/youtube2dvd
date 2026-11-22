@@ -531,3 +531,19 @@ func TestYtDlpDialogDirectory(t *testing.T) {
 		t.Errorf("without a home folder = %q, want none", got)
 	}
 }
+
+func TestSettingsNormalizedTurnsYtDlpOffWithoutPath(t *testing.T) {
+	tests := []struct {
+		in, want appSettings
+	}{
+		{in: appSettings{UseYtDlp: true, YtDlpPath: ""}, want: appSettings{UseYtDlp: false, YtDlpPath: ""}},
+		{in: appSettings{UseYtDlp: true, YtDlpPath: "   "}, want: appSettings{UseYtDlp: false, YtDlpPath: ""}},
+		{in: appSettings{UseYtDlp: true, YtDlpPath: " /opt/homebrew/bin/yt-dlp "}, want: appSettings{UseYtDlp: true, YtDlpPath: "/opt/homebrew/bin/yt-dlp"}},
+		{in: appSettings{UseYtDlp: false, YtDlpPath: "/usr/local/bin/yt-dlp"}, want: appSettings{UseYtDlp: false, YtDlpPath: "/usr/local/bin/yt-dlp"}},
+	}
+	for _, test := range tests {
+		if got := test.in.normalized(); got != test.want {
+			t.Errorf("%+v.normalized() = %+v, want %+v", test.in, got, test.want)
+		}
+	}
+}

@@ -21,6 +21,17 @@ type appSettings struct {
 	YtDlpPath string `json:"yt_dlp_path"`
 }
 
+// normalized returns the settings with yt-dlp turned off when no executable
+// is set: without a path there is nothing to run, and downloads would only
+// fail.
+func (s appSettings) normalized() appSettings {
+	s.YtDlpPath = strings.TrimSpace(s.YtDlpPath)
+	if s.YtDlpPath == "" {
+		s.UseYtDlp = false
+	}
+	return s
+}
+
 func settingsFilePath() (string, error) {
 	directory, err := os.UserConfigDir()
 	if err != nil {

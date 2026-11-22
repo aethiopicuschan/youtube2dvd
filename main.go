@@ -2046,6 +2046,7 @@ func main() {
 		// user turns it on.
 		settings.YtDlpPath = findYtDlp()
 	}
+	settings = settings.normalized()
 	checkResults := make(chan environmentCheck, 1)
 	app := &root{
 		packages:             full,

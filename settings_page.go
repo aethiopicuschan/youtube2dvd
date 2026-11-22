@@ -129,17 +129,25 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 	p.heading.SetOverrideStyles(&headingStyle, false)
 
 	p.useCheckbox.SetValue(p.settings.UseYtDlp)
-	context.SetEnabled(&p.useCheckbox, !p.busy)
+	// yt-dlp can only be turned on once there is an executable to run.
+	context.SetEnabled(&p.useCheckbox, !p.busy && p.settings.YtDlpPath != "")
 	p.useCheckbox.OnValueChanged(func(_ *guigui.Context, value bool) {
-		if p.busy || p.settings.UseYtDlp == value {
+		if p.busy || p.settings.UseYtDlp == value || (value && p.settings.YtDlpPath == "") {
 			return
 		}
 		p.settings.UseYtDlp = value
 		p.changed()
 	})
-	p.useLabel.SetValue("外部の yt-dlp を使ってダウンロードする")
+	useLabel := "外部の yt-dlp を使ってダウンロードする"
+	p.useLabel.SetValue(useLabel)
 	p.useLabel.SetSelectable(false)
 	p.useLabel.SetVerticalAlign(basicwidget.VerticalAlignMiddle)
+	// The label is greyed out together with its checkbox.
+	var useLabelStyle basicwidget.TextStyles
+	if p.busy || p.settings.YtDlpPath == "" {
+		useLabelStyle.SetColorInRange(0, len(useLabel), color.RGBA{R: 145, G: 145, B: 145, A: 255})
+	}
+	p.useLabel.SetOverrideStyles(&useLabelStyle, false)
 
 	p.pathLabel.SetValue("yt-dlp 実行ファイルのパス")
 	p.pathLabel.SetSelectable(false)
@@ -152,7 +160,9 @@ func (p *settingsPage) Build(context *guigui.Context, adder *guigui.ChildAdder) 
 		if p.busy || p.settings.YtDlpPath == path {
 			return
 		}
-		p.settings.YtDlpPath = path
+		updated := *p.settings
+		updated.YtDlpPath = path
+		*p.settings = updated.normalized()
 		p.changed()
 	})
 
