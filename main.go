@@ -333,36 +333,37 @@ type environmentCard struct {
 	background basicwidget.Background
 	heading    basicwidget.Text
 	value      basicwidget.Text
-	hint       basicwidget.Text
 	label      string
 	status     string
-	hintText   string
+	// detail, if any, follows the status on the same line in its own tone.
+	detail     string
 	tone       color.Color
-	hintTone   color.Color
+	detailTone color.Color
 }
 
 func (c *environmentCard) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	c.background.SetTintColor(color.RGBA{R: 250, G: 250, B: 250, A: 255})
 	c.heading.SetValue(c.label)
-	c.value.SetValue(c.status)
-	hintText := c.hintText
-	c.hint.SetValue(hintText)
+	value := c.status
+	if c.detail != "" {
+		value += "：" + c.detail
+	}
+	c.value.SetValue(value)
 	c.heading.SetSelectable(false)
 	c.value.SetSelectable(false)
-	c.hint.SetSelectable(false)
-	c.hint.SetFontSize(float64(basicwidget.UnitSize(context)) * 0.65)
-	c.hint.SetLineHeight(float64(basicwidget.UnitSize(context)) * 0.75)
+	// A long status wraps onto a second line in a narrow window.
+	c.value.SetMultiline(true)
+	c.value.SetWrapMode(basicwidget.WrapModeNormal)
 	var style basicwidget.TextStyles
 	style.SetColorInRange(0, len(c.status), c.tone)
-	style.SetWeightInRange(0, len(c.status), 600)
+	if c.detail != "" {
+		style.SetColorInRange(len(c.status), len(value), c.detailTone)
+	}
+	style.SetWeightInRange(0, len(value), 600)
 	c.value.SetOverrideStyles(&style, false)
-	var hintStyle basicwidget.TextStyles
-	hintStyle.SetColorInRange(0, len(hintText), c.hintTone)
-	c.hint.SetOverrideStyles(&hintStyle, false)
 	adder.AddWidget(&c.background)
 	adder.AddWidget(&c.heading)
 	adder.AddWidget(&c.value)
-	adder.AddWidget(&c.hint)
 	return nil
 }
 
@@ -371,8 +372,7 @@ func (c *environmentCard) Layout(context *guigui.Context, bounds *guigui.WidgetB
 	u := basicwidget.UnitSize(context)
 	layouter.LayoutWidget(&c.background, b)
 	layouter.LayoutWidget(&c.heading, image.Rect(b.Min.X+u, b.Min.Y+u/6, b.Max.X-u, b.Min.Y+u))
-	layouter.LayoutWidget(&c.value, image.Rect(b.Min.X+u, b.Min.Y+u, b.Max.X-u, b.Min.Y+2*u))
-	layouter.LayoutWidget(&c.hint, image.Rect(b.Min.X+u, b.Min.Y+2*u, b.Max.X-u, b.Max.Y-u/6))
+	layouter.LayoutWidget(&c.value, image.Rect(b.Min.X+u, b.Min.Y+u, b.Max.X, b.Max.Y-u/6))
 }
 
 type environmentCheck struct {
@@ -1064,11 +1064,11 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.driveCard.label = "DVDドライブ"
 		r.driveCard.status = r.driveState
 		r.driveCard.tone = statusColor(r.driveState)
-		r.driveCard.hintText = ""
+		r.driveCard.detail = ""
 		if r.driveState == "検出済み" {
-			r.driveCard.hintText = "ディスク：" + r.discState
+			r.driveCard.detail = r.discState
 		}
-		r.driveCard.hintTone = statusColor(r.discState)
+		r.driveCard.detailTone = statusColor(r.discState)
 		r.environmentDivider.SetTintColor(color.RGBA{R: 185, G: 185, B: 185, A: 255})
 		r.environmentNotice.SetValue(environmentNotice(r.internetState, r.driveState, r.discState))
 		r.environmentNotice.SetMultiline(true)
