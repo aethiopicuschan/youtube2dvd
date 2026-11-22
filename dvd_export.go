@@ -512,6 +512,11 @@ func exportDVDISO(ctx context.Context, queue []string, estimatedBytes int64, men
 		Standard:  video2dvd.VideoStandardNTSC,
 		Aspect:    video2dvd.AspectRatio16x9,
 		MenuTitle: menuTitle,
+		// The subtitle tracks of a video become DVD subtitles in track order.
+		// A downloaded video has the 字幕 the user chose first and only has
+		// subtitles when one was chosen, so the first stream is shown.
+		IncludeSubtitles: true,
+		ShowSubtitles:    true,
 	}
 	if strings.TrimSpace(options.MenuTitle) == "" {
 		options.MenuTitle = "YouTube to DVD"
