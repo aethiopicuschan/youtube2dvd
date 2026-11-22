@@ -277,3 +277,26 @@ func TestLoadSettingsAcceptsByteOrderMark(t *testing.T) {
 		t.Errorf("settings = %+v, %v", settings, err)
 	}
 }
+
+func TestSettingsPageAsksBeforeReset(t *testing.T) {
+	resets := 0
+	page := &settingsPage{settings: &appSettings{}, resetFile: func() error { resets++; return nil }}
+
+	page.confirmReset = func() (bool, error) { return false, nil }
+	page.reset()
+	if resets != 0 || page.fileMessage != "" {
+		t.Errorf("after cancelling: %d resets, message %q", resets, page.fileMessage)
+	}
+
+	page.confirmReset = func() (bool, error) { return false, errors.New("no dialog") }
+	page.reset()
+	if resets != 0 || !strings.Contains(page.fileMessage, "no dialog") {
+		t.Errorf("without a dialog: %d resets, message %q", resets, page.fileMessage)
+	}
+
+	page.confirmReset = func() (bool, error) { return true, nil }
+	page.reset()
+	if resets != 1 || page.fileMessage != "" {
+		t.Errorf("after confirming: %d resets, message %q", resets, page.fileMessage)
+	}
+}

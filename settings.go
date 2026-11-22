@@ -249,3 +249,20 @@ func checkCookiesFile(path string) error {
 	}
 	return errors.New("このファイルはNetscape形式の cookies.txt ではありません")
 }
+
+// confirmResetSettings asks the user whether to reset the settings. It
+// reports false when the user cancels; the dialog starts on キャンセル.
+func confirmResetSettings() (bool, error) {
+	err := zenity.Question(
+		"設定をリセットしますか？\nyt-dlp の利用やクッキーの指定など、すべての設定が初期状態に戻ります。",
+		zenity.Title("設定のリセット"),
+		zenity.OKLabel("リセットする"),
+		zenity.CancelLabel("キャンセル"),
+		zenity.Icon(zenity.WarningIcon),
+		zenity.DefaultCancel(),
+	)
+	if errors.Is(err, zenity.ErrCanceled) {
+		return false, nil
+	}
+	return err == nil, err
+}

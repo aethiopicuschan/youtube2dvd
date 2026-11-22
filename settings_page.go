@@ -62,6 +62,9 @@ type settingsPage struct {
 	resetFile  func() error
 	// fileMessage tells why the last of them failed.
 	fileMessage string
+	// confirmReset asks before the settings are reset; nil asks with a
+	// dialog. Tests replace it.
+	confirmReset func() (bool, error)
 	// lookup finds and checks yt-dlp; nil uses lookUpYtDlp. Tests replace
 	// it.
 	lookup func(ctx context.Context) (path, version string, err error)
@@ -376,9 +379,7 @@ func (p *settingsPage) buildFileLinks() {
 	link(&p.reloadLink, "設定をリロードする", func() {
 		p.runFileAction(p.reloadFile, "設定をリロードできませんでした")
 	})
-	link(&p.resetLink, "設定をリセットする", func() {
-		p.runFileAction(p.resetFile, "設定をリセットできませんでした")
-	})
+	link(&p.resetLink, "設定をリセットする", p.reset)
 
 	message := p.fileMessage
 	p.fileNote.SetValue(message)
@@ -400,6 +401,24 @@ func (p *settingsPage) runFileAction(action func() error, failed string) {
 		}
 	}
 	guigui.RequestRebuild()
+}
+
+// reset resets the settings once the user confirmed it.
+func (p *settingsPage) reset() {
+	confirm := p.confirmReset
+	if confirm == nil {
+		confirm = confirmResetSettings
+	}
+	ok, err := confirm()
+	if err != nil {
+		p.fileMessage = "設定をリセットできませんでした: " + err.Error()
+		guigui.RequestRebuild()
+		return
+	}
+	if !ok {
+		return
+	}
+	p.runFileAction(p.resetFile, "設定をリセットできませんでした")
 }
 
 // reloaded forgets what the page knew about the settings it showed, after
