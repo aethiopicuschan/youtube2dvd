@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kkdai/youtube/v2"
 )
 
 func loadYtDlpFixture(t *testing.T) ytDlpInfo {
@@ -471,6 +474,24 @@ func TestDownloadWithYtDlpFailuresLeaveNoFiles(t *testing.T) {
 			test.check(t, err)
 			assertOnlyFiles(t, directory)
 		})
+	}
+}
+
+func TestExplainBotCheck(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("動画情報を取得できませんでした: %w", youtube.ErrBotCheck),
+		&ytDlpExitError{stderr: "ERROR: [youtube] EOxarwd3eTs: Sign in to confirm you’re not a bot. This helps protect our community.", err: errors.New("exit status 1")},
+	} {
+		if got := explainBotCheck(err); !errors.Is(got, errYouTubeBotCheck) {
+			t.Errorf("explainBotCheck(%v) = %v", err, got)
+		}
+	}
+	other := &ytDlpExitError{stderr: "ERROR: Video unavailable", err: errors.New("exit status 1")}
+	if got := explainBotCheck(other); got != other {
+		t.Errorf("another error was replaced: %v", got)
+	}
+	if explainBotCheck(nil) != nil {
+		t.Error("nil became an error")
 	}
 }
 

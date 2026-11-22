@@ -916,6 +916,9 @@ func (r *root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		}
 		r.qualityStatus.SetValue(qualityStatus)
 		r.qualityStatus.SetSelectable(false)
+		// An error can take more than one line, and its advice comes last.
+		r.qualityStatus.SetMultiline(true)
+		r.qualityStatus.SetWrapMode(basicwidget.WrapModeNormal)
 		var qualityStatusStyle basicwidget.TextStyles
 		if r.qualityError != "" {
 			qualityStatusStyle.SetColorInRange(0, len(qualityStatus), color.RGBA{R: 190, G: 35, B: 35, A: 255})
@@ -2177,6 +2180,14 @@ func downloadRowColumns(context *guigui.Context, content image.Rectangle) (left,
 	return content.Min.X + 4*u, content.Max.X - 5*u
 }
 
+// layoutQualityStatus lays out the status shown in place of the qualities
+// at top, as tall as its wrapped lines.
+func (r *root) layoutQualityStatus(context *guigui.Context, layouter *guigui.ChildLayouter, content image.Rectangle, top int) {
+	u := basicwidget.UnitSize(context)
+	height := max(u, r.qualityStatus.Measure(context, guigui.FixedWidthConstraints(content.Dx())).Y)
+	layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, top, content.Max.X, top+height))
+}
+
 // layoutQualityRow lays out the 画質 row and the download button at top.
 func (r *root) layoutQualityRow(context *guigui.Context, layouter *guigui.ChildLayouter, content image.Rectangle, top int) {
 	u := basicwidget.UnitSize(context)
@@ -2438,7 +2449,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					if len(r.qualityOptions) > 0 {
 						r.layoutQualityRow(context, layouter, content, qualityTop)
 					} else if qualityStatusVisible {
-						layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, qualityTop, content.Max.X, qualityTop+u))
+						r.layoutQualityStatus(context, layouter, content, qualityTop)
 					}
 					buttonTop = qualityTop
 				} else {
@@ -2452,7 +2463,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					if len(r.qualityOptions) > 0 {
 						r.layoutQualityRow(context, layouter, content, qualityTop)
 					} else if qualityStatusVisible {
-						layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, qualityTop, content.Max.X, qualityTop+u))
+						r.layoutQualityStatus(context, layouter, content, qualityTop)
 					}
 					buttonTop = qualityTop
 				}
@@ -2461,7 +2472,7 @@ func (r *root) Layout(context *guigui.Context, bounds *guigui.WidgetBounds, layo
 					progressBase = r.layoutCaptionRows(context, layouter, content, captionTop)
 				}
 			} else if r.qualityLoading || r.qualityError != "" || (strings.TrimSpace(r.urlInput.Value()) != "" && validateYouTubeURL(r.urlInput.Value()) == "" && r.internetState != "接続あり") {
-				layouter.LayoutWidget(&r.qualityStatus, image.Rect(content.Min.X, content.Min.Y+3*u, content.Max.X, content.Min.Y+4*u))
+				r.layoutQualityStatus(context, layouter, content, content.Min.Y+3*u)
 			}
 			progressBase = max(progressBase, buttonTop)
 			if r.downloadInFlight {

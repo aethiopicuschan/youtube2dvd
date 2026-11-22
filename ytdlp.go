@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kkdai/youtube/v2"
 )
 
 // This file runs the yt-dlp that the user installed and enabled on the
@@ -662,9 +664,32 @@ func downloadWithYtDlp(ctx context.Context, runner ytDlpRunner, directory, video
 // the built-in downloader.
 func videoDetails(ctx context.Context, settings appSettings, videoURL string) (videoInfo, error) {
 	if settings.UseYtDlp {
-		return getYtDlpDetails(ctx, execYtDlpRunner{path: settings.YtDlpPath}, videoURL)
+		info, err := getYtDlpDetails(ctx, execYtDlpRunner{path: settings.YtDlpPath}, videoURL)
+		return info, explainBotCheck(err)
 	}
-	return getYouTubeDetails(ctx, videoURL)
+	info, err := getYouTubeDetails(ctx, videoURL)
+	return info, explainBotCheck(err)
+}
+
+// errYouTubeBotCheck reports that YouTube asked to sign in to confirm that
+// the request does not come from a bot. YouTube does so for a while after
+// many requests from one network, so the user is asked to wait.
+var errYouTubeBotCheck = errors.New("YouTubeから、ボットではないことの確認を求められたため、動画を取得できませんでした。しばらく時間をおいてから、もう一度お試しください。")
+
+// explainBotCheck replaces the bot check error of either downloader with
+// errYouTubeBotCheck, and returns other errors as they are.
+func explainBotCheck(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, youtube.ErrBotCheck) {
+		return errYouTubeBotCheck
+	}
+	var exit *ytDlpExitError
+	if errors.As(err, &exit) && strings.Contains(exit.stderr, "not a bot") {
+		return errYouTubeBotCheck
+	}
+	return err
 }
 
 // downloadVideo downloads quality, the requested audio tracks and the
@@ -673,11 +698,13 @@ func videoDetails(ctx context.Context, settings appSettings, videoURL string) (v
 func downloadVideo(ctx context.Context, settings appSettings, videoURL string, quality downloadQuality, audio []requestedAudio, captions []requestedCaption, onProgress func(downloadProgress)) (string, string, error) {
 	if quality.ytDlpFormat == "" {
 		// The built-in downloader offers no choice of audio.
-		return downloadYouTubeVideo(ctx, videoURL, quality, captions, onProgress)
+		path, warning, err := downloadYouTubeVideo(ctx, videoURL, quality, captions, onProgress)
+		return path, warning, explainBotCheck(err)
 	}
 	directory, err := downloadDirectory()
 	if err != nil {
 		return "", "", err
 	}
-	return downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, audio, captions, muxerFor(quality.extension), onProgress)
+	path, warning, err := downloadWithYtDlp(ctx, execYtDlpRunner{path: settings.YtDlpPath}, directory, videoURL, quality, audio, captions, muxerFor(quality.extension), onProgress)
+	return path, warning, explainBotCheck(err)
 }
